@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "scripts": {
+    "build": "npm --prefix functions run build",
+    "serve": "mkdir -p .firebase/emulator-data && npm run build && firebase emulators:start --only functions,firestore --import=.firebase/emulator-data --export-on-exit=.firebase/emulator-data",
+    "serve:fresh": "npm run build && firebase emulators:start --only functions,firestore",
+    "deploy": "npm run build && firebase deploy --only functions"
+  }
+}

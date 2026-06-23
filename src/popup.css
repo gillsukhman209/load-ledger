@@ -1,0 +1,64 @@
+:root {
+  color-scheme: light dark;
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+body {
+  width: 320px;
+  margin: 0;
+  color: #1f2933;
+  background: #ffffff;
+}
+
+main {
+  padding: 16px;
+}
+
+h1 {
+  margin: 0 0 14px;
+  font-size: 18px;
+}
+
+dl {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+
+dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+dt {
+  color: #52606d;
+}
+
+dd {
+  margin: 0;
+  font-weight: 700;
+}
+
+button {
+  width: 100%;
+  min-height: 38px;
+  margin-top: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: #146eb4;
+  color: #ffffff;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button.secondary {
+  background: #e4e7eb;
+  color: #1f2933;
+}
+
+#message {
+  min-height: 18px;
+  margin: 12px 0 0;
+  color: #216e4e;
+}

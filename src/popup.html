@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Relay Trips Ledger</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <h1>Trips Ledger</h1>
+      <dl>
+        <div>
+          <dt>Trips found</dt>
+          <dd id="tripCount">0</dd>
+        </div>
+        <div>
+          <dt>Last sync</dt>
+          <dd id="lastSyncAt">Never</dd>
+        </div>
+      </dl>
+      <button id="syncNow" type="button">Sync Now</button>
+      <button id="openOptions" class="secondary" type="button">Settings</button>
+      <p id="message" role="status"></p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

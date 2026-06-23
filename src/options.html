@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Relay Trips Ledger Settings</title>
+    <link rel="stylesheet" href="options.css">
+  </head>
+  <body>
+    <main>
+      <h1>Relay Trips Ledger</h1>
+      <form id="settings-form">
+        <label>
+          Firebase backend URL
+          <input id="backendBaseUrl" name="backendBaseUrl" type="url" placeholder="http://localhost:5001/relayloadtracker/us-central1/api">
+        </label>
+
+        <label>
+          Backend API key
+          <input id="apiKey" name="apiKey" type="password" autocomplete="off">
+        </label>
+
+        <label class="checkbox">
+          <input id="autoSync" name="autoSync" type="checkbox">
+          Auto-sync while Relay is open
+        </label>
+
+        <label>
+          Sync interval, minutes
+          <input id="syncIntervalMinutes" name="syncIntervalMinutes" type="number" min="1" step="1">
+        </label>
+
+        <label>
+          Date range to scan, days
+          <input id="dateRangeDays" name="dateRangeDays" type="number" min="0" step="1">
+        </label>
+
+        <button type="submit">Save Settings</button>
+        <p id="status" role="status"></p>
+      </form>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>

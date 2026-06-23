@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "Amazon Relay Trips Ledger",
+  "description": "Capture Amazon Relay Trips and sync them to a Firebase ledger backend.",
+  "version": "0.2.0",
+  "permissions": ["storage", "activeTab"],
+  "host_permissions": [
+    "https://relay.amazon.com/*",
+    "https://*.relay.amazon.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*",
+    "https://*.cloudfunctions.net/*",
+    "https://*.web.app/*",
+    "https://*.firebaseapp.com/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://relay.amazon.com/*", "https://*.relay.amazon.com/*"],
+      "js": ["src/content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["src/page-hook.js"],
+      "matches": ["https://relay.amazon.com/*", "https://*.relay.amazon.com/*"]
+    }
+  ],
+  "action": {
+    "default_title": "Relay Trips Ledger",
+    "default_popup": "src/popup.html"
+  },
+  "options_page": "src/options.html"
+}

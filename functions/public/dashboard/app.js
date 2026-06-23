@@ -11,7 +11,6 @@ const state = {
     search: "",
     driver: "",
     status: "",
-    paid: "",
     invoice: "",
     source: ""
   },
@@ -29,6 +28,8 @@ const elements = {
   refreshButton: document.querySelector("#refreshButton"),
   settingsButton: document.querySelector("#settingsButton"),
   settingsPanel: document.querySelector("#settingsPanel"),
+  filtersButton: document.querySelector("#filtersButton"),
+  filtersPanel: document.querySelector("#filtersPanel"),
   backendUrlInput: document.querySelector("#backendUrlInput"),
   apiKeyInput: document.querySelector("#apiKeyInput"),
   gmailLookbackDaysInput: document.querySelector("#gmailLookbackDaysInput"),
@@ -42,15 +43,11 @@ const elements = {
   searchInput: document.querySelector("#searchInput"),
   driverFilter: document.querySelector("#driverFilter"),
   statusFilter: document.querySelector("#statusFilter"),
-  paidFilter: document.querySelector("#paidFilter"),
   invoiceFilter: document.querySelector("#invoiceFilter"),
   sourceFilter: document.querySelector("#sourceFilter"),
   sortField: document.querySelector("#sortField"),
   sortDirection: document.querySelector("#sortDirection"),
   sortHeaders: [...document.querySelectorAll("[data-sort]")],
-  gmailAccounts: document.querySelector("#gmailAccounts"),
-  driverTotals: document.querySelector("#driverTotals"),
-  recentScans: document.querySelector("#recentScans"),
   loadsBody: document.querySelector("#loadsBody"),
   emptyState: document.querySelector("#emptyState"),
   rowTemplate: document.querySelector("#loadRowTemplate")
@@ -70,7 +67,15 @@ elements.connectGmailButton.addEventListener("click", () => {
 elements.syncGmailButton.addEventListener("click", syncGmail);
 elements.clearGmailButton.addEventListener("click", clearGmailImports);
 elements.settingsButton.addEventListener("click", () => {
-  elements.settingsPanel.hidden = !elements.settingsPanel.hidden;
+  const isHidden = !elements.settingsPanel.hidden;
+  elements.settingsPanel.hidden = isHidden;
+  elements.settingsButton.setAttribute("aria-expanded", String(!isHidden));
+});
+elements.filtersButton.addEventListener("click", () => {
+  const isHidden = !elements.filtersPanel.hidden;
+  elements.filtersPanel.hidden = isHidden;
+  elements.filtersButton.textContent = isHidden ? "Show filters" : "Hide filters";
+  elements.filtersButton.setAttribute("aria-expanded", String(!isHidden));
 });
 elements.saveSettingsButton.addEventListener("click", () => {
   state.backendUrl = elements.backendUrlInput.value.trim() || DEFAULT_BACKEND_URL;
@@ -82,6 +87,7 @@ elements.saveSettingsButton.addEventListener("click", () => {
   localStorage.setItem("relayLedgerGmailLookbackDays", String(state.gmailLookbackDays));
   localStorage.setItem("relayLedgerGmailMaxResults", String(state.gmailMaxResults));
   elements.settingsPanel.hidden = true;
+  elements.settingsButton.setAttribute("aria-expanded", "false");
   loadDashboard();
 });
 
@@ -95,10 +101,6 @@ elements.driverFilter.addEventListener("change", (event) => {
 });
 elements.statusFilter.addEventListener("change", (event) => {
   state.filters.status = event.target.value;
-  render();
-});
-elements.paidFilter.addEventListener("change", (event) => {
-  state.filters.paid = event.target.value;
   render();
 });
 elements.invoiceFilter.addEventListener("change", (event) => {
@@ -260,7 +262,7 @@ function defaultBackendUrl() {
 }
 
 function populateFilterOptions() {
-  replaceOptions(elements.driverFilter, "All drivers", uniqueValues(state.loads.map((load) => load.driverName || "Unassigned")));
+  replaceOptions(elements.driverFilter, "All drivers", uniqueValues(state.loads.map((load) => displayDriver(load.driverName))));
   replaceOptions(elements.statusFilter, "All statuses", uniqueValues(state.loads.map((load) => load.status || "Unknown")));
   elements.driverFilter.value = state.filters.driver;
   elements.statusFilter.value = state.filters.status;
@@ -277,9 +279,6 @@ function render() {
   const filtered = sortedLoads(filteredLoads());
   renderSortHeaders();
   renderSummary(filtered);
-  renderGmailAccounts();
-  renderDriverTotals(filtered);
-  renderScans();
   renderTable(filtered);
 }
 
@@ -302,7 +301,7 @@ function sortValue(load, field) {
     case "trip":
       return load.amazonTripId || load.amazonLoadId || load.id || "";
     case "driver":
-      return load.driverName || "Unassigned";
+      return displayDriver(load.driverName);
     case "pickup":
       return cleanPlace(load.origin);
     case "dropoff":
@@ -319,8 +318,6 @@ function sortValue(load, field) {
       return load.source || "trips";
     case "invoice":
       return load.invoiceStatus || "Unmatched";
-    case "paid":
-      return load.paid ? 1 : 0;
     default:
       return "";
   }
@@ -340,7 +337,7 @@ function persistSort() {
 }
 
 function defaultDirectionFor(field) {
-  return ["start", "end", "payout", "paid"].includes(field) ? "desc" : "asc";
+  return ["start", "end", "payout"].includes(field) ? "desc" : "asc";
 }
 
 function filteredLoads() {
@@ -348,7 +345,7 @@ function filteredLoads() {
     const searchable = [
       load.amazonTripId,
       load.amazonLoadId,
-      load.driverName,
+      displayDriver(load.driverName),
       load.origin,
       load.destination,
       load.status,
@@ -357,10 +354,8 @@ function filteredLoads() {
     ].join(" ").toLowerCase();
 
     if (state.filters.search && !searchable.includes(state.filters.search)) return false;
-    if (state.filters.driver && (load.driverName || "Unassigned") !== state.filters.driver) return false;
+    if (state.filters.driver && displayDriver(load.driverName) !== state.filters.driver) return false;
     if (state.filters.status && (load.status || "Unknown") !== state.filters.status) return false;
-    if (state.filters.paid === "paid" && !load.paid) return false;
-    if (state.filters.paid === "unpaid" && load.paid) return false;
     if (state.filters.invoice && (load.invoiceStatus || "Unmatched") !== state.filters.invoice) return false;
     if (state.filters.source === "trips" && !sourceHas(load, "trips")) return false;
     if (state.filters.source === "gmail" && !sourceHas(load, "gmail")) return false;
@@ -371,7 +366,7 @@ function filteredLoads() {
 
 function renderSummary(loads) {
   const totalPayout = sum(loads.map((load) => moneyValue(load.payout)));
-  const unpaidPayout = sum(loads.filter((load) => !load.paid).map((load) => moneyValue(load.payout)));
+  const unpaidPayout = sum(loads.filter((load) => !isInvoicePaid(load)).map((load) => moneyValue(load.payout)));
   const reviewCount = loads.filter((load) => load.missingFromTrips || load.status === "Needs review" || load.invoiceStatus === "Disputed").length;
   const gmailMissing = loads.filter((load) => sourceHas(load, "gmail") && !sourceHas(load, "trips") && load.missingFromTrips).length;
   elements.totalLoads.textContent = String(loads.length);
@@ -381,82 +376,44 @@ function renderSummary(loads) {
   elements.gmailMissing.textContent = String(gmailMissing);
 }
 
-function renderGmailAccounts() {
-  elements.gmailAccounts.replaceChildren();
-  if (state.accounts.length === 0) {
-    const item = document.createElement("div");
-    item.className = "account-item";
-    item.innerHTML = "<strong>No Gmail connected</strong><span>Use Connect Gmail above.</span>";
-    elements.gmailAccounts.append(item);
-    return;
-  }
-
-  state.accounts.forEach((account) => {
-    const item = document.createElement("div");
-    item.className = "account-item";
-    item.innerHTML = `
-      <div><strong></strong><span>${account.hasRefreshToken ? "Connected" : "Needs reconnect"}</span></div>
-      <div><span>Last sync</span><strong>${formatTimestamp(account.lastGmailSyncAt) || "Never"}</strong></div>
-      <div><span>Last result</span><strong>${account.lastGmailSyncUpserted || 0}/${account.lastGmailSyncProcessed || 0}</strong></div>
-    `;
-    item.querySelector("strong").textContent = account.email || "Gmail account";
-    elements.gmailAccounts.append(item);
-  });
-}
-
-function renderDriverTotals(loads) {
-  const drivers = new Map();
-  loads.forEach((load) => {
-    const driver = load.driverName || "Unassigned";
-    const existing = drivers.get(driver) || { count: 0, payout: 0, unpaid: 0 };
-    existing.count += 1;
-    existing.payout += moneyValue(load.payout);
-    if (!load.paid) existing.unpaid += moneyValue(load.payout);
-    drivers.set(driver, existing);
-  });
-
-  elements.driverTotals.replaceChildren();
-  [...drivers.entries()]
-    .sort((a, b) => b[1].payout - a[1].payout)
-    .forEach(([driver, totals]) => {
-      const item = document.createElement("div");
-      item.className = "driver-item";
-      item.innerHTML = `
-        <div><strong></strong><span>${totals.count} loads</span></div>
-        <div><span>Total</span><strong>${currency(totals.payout)}</strong></div>
-        <div><span>Unpaid</span><strong>${currency(totals.unpaid)}</strong></div>
-      `;
-      item.querySelector("strong").textContent = driver;
-      elements.driverTotals.append(item);
-    });
-}
-
-function renderScans() {
-  elements.recentScans.replaceChildren();
-  state.scans.forEach((scan) => {
-    const item = document.createElement("div");
-    item.className = "scan-item";
-    item.innerHTML = `
-      <div><strong>${scan.tripCount || 0} trips</strong><span>${formatTimestamp(scan.createdAt)}</span></div>
-      <span>${scan.reason || scan.source || "sync"}</span>
-    `;
-    elements.recentScans.append(item);
-  });
-}
-
 function renderTable(loads) {
   elements.loadsBody.replaceChildren();
   elements.emptyState.hidden = loads.length !== 0;
 
-  loads.forEach((load) => {
+  groupLoadsByWeek(loads).forEach((week) => {
+    elements.loadsBody.append(weekHeaderRow(week));
+    week.loads.forEach((load) => {
+      elements.loadsBody.append(loadRow(load));
+    });
+  });
+}
+
+function weekHeaderRow(week) {
+  const row = document.createElement("tr");
+  row.className = "week-row";
+  const cell = document.createElement("td");
+  cell.colSpan = 10;
+  cell.innerHTML = `
+    <div class="week-summary">
+      <strong>${week.label}</strong>
+      <span>${week.loads.length} loads</span>
+      <span>Total ${currency(week.total)}</span>
+      <span>Unpaid ${currency(week.unpaid)}</span>
+      <span>${week.reviewCount} review</span>
+    </div>
+  `;
+  row.append(cell);
+  return row;
+}
+
+function loadRow(load) {
     const row = elements.rowTemplate.content.firstElementChild.cloneNode(true);
     row.dataset.id = load.id;
     setCell(row, "trip", load.amazonTripId || load.amazonLoadId || load.id);
-    setCell(row, "driver", load.driverName || "Unassigned");
-    setCell(row, "origin", cleanPlace(load.origin));
-    setCell(row, "destination", cleanPlace(load.destination));
+    setCell(row, "driver", displayDriver(load.driverName));
+    setCell(row, "origin", cleanCity(load.origin));
+    setCell(row, "destination", cleanCity(load.destination));
     setCell(row, "start", load.tripStartDate || load.pickupDate || "");
-    setCell(row, "end", load.tripEndDate || "");
     setCell(row, "payout", currency(moneyValue(load.payout)));
     row.querySelector('[data-field="status"]').append(statusBadge(load));
     row.querySelector('[data-field="source"]').append(sourceBadge(load));
@@ -465,16 +422,68 @@ function renderTable(loads) {
     invoice.value = load.invoiceStatus || "Unmatched";
     invoice.addEventListener("change", () => updateLoad(load.id, { invoiceStatus: invoice.value }));
 
-    const paid = row.querySelector('[data-action="paid"]');
-    paid.checked = Boolean(load.paid);
-    paid.addEventListener("change", () => updateLoad(load.id, { paid: paid.checked, paidAt: paid.checked ? new Date().toISOString() : "" }));
-
+    const noteButton = row.querySelector('[data-action="show-note"]');
     const notes = row.querySelector('[data-action="notes"]');
     notes.value = load.notes || "";
+    noteButton.textContent = "Add note";
+    noteButton.hidden = Boolean(load.notes);
+    notes.hidden = !load.notes;
+    noteButton.addEventListener("click", () => {
+      noteButton.hidden = true;
+      notes.hidden = false;
+      notes.focus();
+    });
     notes.addEventListener("change", () => updateLoad(load.id, { notes: notes.value.trim() }));
 
-    elements.loadsBody.append(row);
+    return row;
+}
+
+function groupLoadsByWeek(loads) {
+  const weeks = new Map();
+  loads.forEach((load) => {
+    const week = weekRangeForLoad(load);
+    const existing = weeks.get(week.key) || {
+      ...week,
+      loads: [],
+      total: 0,
+      unpaid: 0,
+      reviewCount: 0
+    };
+
+    existing.loads.push(load);
+    existing.total += moneyValue(load.payout);
+    if (!isInvoicePaid(load)) existing.unpaid += moneyValue(load.payout);
+    if (load.missingFromTrips || load.status === "Needs review" || load.invoiceStatus === "Disputed") {
+      existing.reviewCount += 1;
+    }
+    weeks.set(week.key, existing);
   });
+
+  return [...weeks.values()].sort((a, b) => b.sort - a.sort);
+}
+
+function weekRangeForLoad(load) {
+  const date = loadDate(load.tripStartDate || load.pickupDate || load.bookedAt || load.emailDate);
+  if (!date) return { key: "no-date", label: "No date", sort: 0 };
+
+  // Amazon Relay pay weeks run Sunday through Saturday.
+  const start = new Date(date.getFullYear(), date.getMonth(), date.getDate() - date.getDay());
+  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+  return {
+    key: dateKey(start),
+    label: `${formatMonthDay(start)} - ${formatMonthDay(end)}`,
+    sort: start.getTime()
+  };
+}
+
+function dateKey(date) {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+function formatMonthDay(date) {
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
 function setCell(row, field, value) {
@@ -485,7 +494,7 @@ function statusBadge(load) {
   const badge = document.createElement("span");
   const label = load.missingFromTrips ? "Needs review" : load.status || "Unknown";
   badge.className = "badge";
-  if (load.paid || label === "History") badge.classList.add("ok");
+  if (label === "History") badge.classList.add("ok");
   if (label === "Needs review" || load.invoiceStatus === "Disputed") badge.classList.add("warn");
   if (label === "Cancelled") badge.classList.add("bad");
   badge.textContent = label;
@@ -512,6 +521,10 @@ function sourceHas(load, value) {
   return String(load.source || "trips").split("+").includes(value);
 }
 
+function isInvoicePaid(load) {
+  return String(load.invoiceStatus || "").toLowerCase() === "paid";
+}
+
 async function updateLoad(id, patch) {
   try {
     await apiPatch(`/loads/${encodeURIComponent(id)}`, patch);
@@ -526,6 +539,42 @@ async function updateLoad(id, patch) {
 
 function cleanPlace(value) {
   return String(value || "").replace(/\b[A-Z0-9]{3,5}\s+/g, "").replace(/\s+/g, " ").trim();
+}
+
+function cleanCity(value) {
+  const withoutCode = cleanPlace(value);
+  const city = withoutCode
+    .replace(/\b\d{5}(?:-\d{4})?\b/g, "")
+    .replace(/,\s*(?:AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|IA|ID|IL|IN|KS|KY|LA|MA|MD|ME|MI|MN|MO|MS|MT|NC|ND|NE|NH|NJ|NM|NV|NY|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VA|VT|WA|WI|WV|WY)\b/gi, "")
+    .replace(/,\s*(?:Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|West Virginia|Wisconsin|Wyoming)\b/gi, "")
+    .replace(/\s*,\s*$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return titleCaseCity(city);
+}
+
+function titleCaseCity(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/\b[a-z]/g, (letter) => letter.toUpperCase());
+}
+
+function displayDriver(value) {
+  const normalized = normalizeDriverName(value);
+  if (!normalized) return "Unassigned";
+  const parts = normalized.split(/\s+/).filter(Boolean);
+  if (parts.length < 2) return normalized;
+  return `${parts[0][0]}. ${parts.at(-1)}`;
+}
+
+function normalizeDriverName(value) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  const normalized = text.replace(/[^a-z]/gi, "").toLowerCase();
+  if (normalized === "rsingh" || normalized === "ranjitsingh" || normalized === "rajitsingh") {
+    return "RANJIT SINGH";
+  }
+  return text.toUpperCase();
 }
 
 function moneyValue(value) {
@@ -544,22 +593,37 @@ function clampNumber(value, min, max, fallback) {
 }
 
 function sortableDate(value) {
-  const text = String(value || "").trim();
-  if (!text) return 0;
+  return loadDate(value)?.getTime() || 0;
+}
 
-  const parsed = new Date(text);
-  if (!Number.isNaN(parsed.getTime())) return parsed.getTime();
+function loadDate(value) {
+  const text = String(value || "").trim();
+  if (!text) return null;
 
   const monthMatch = text.match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2})\b/i);
   if (monthMatch) {
     const months = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
     const month = months.indexOf(monthMatch[1].slice(0, 3).toLowerCase());
     const day = Number(monthMatch[2]);
-    const year = new Date().getFullYear();
-    return new Date(year, month, day).getTime();
+    const year = inferredYearForMonthDay(month, day);
+    return new Date(year, month, day, 12);
   }
 
-  return 0;
+  const parsed = new Date(text);
+  if (!Number.isNaN(parsed.getTime())) {
+    return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate(), 12);
+  }
+
+  return null;
+}
+
+function inferredYearForMonthDay(month, day) {
+  const now = new Date();
+  const candidate = new Date(now.getFullYear(), month, day, 12);
+  const sixMonthsMs = 183 * 24 * 60 * 60 * 1000;
+  if (candidate.getTime() - now.getTime() > sixMonthsMs) return now.getFullYear() - 1;
+  if (now.getTime() - candidate.getTime() > sixMonthsMs) return now.getFullYear() + 1;
+  return now.getFullYear();
 }
 
 function currency(value) {

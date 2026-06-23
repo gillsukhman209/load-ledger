@@ -406,6 +406,7 @@ app.post("/trips/sync", requireApiKey, async (req, res) => {
     pageUrl: req.body.pageUrl || "",
     syncedAt: req.body.syncedAt || new Date().toISOString(),
     tripCount: trips.length,
+    tripIds: trips.map((trip) => trip.tripId).filter(Boolean),
     createdAt: now()
   });
 
@@ -420,7 +421,7 @@ app.post("/trips/sync", requireApiKey, async (req, res) => {
         {
           source: mergeSource(match.data.source, "trips"),
           amazonTripId: trip.tripId,
-          driverName: trip.driver || match.data.driverName || "",
+          driverName: normalizeDriverName(trip.driver || match.data.driverName || ""),
           status: trip.status || match.data.status || "seen_in_trips",
           currentTripStatus: trip.status || "",
           origin: trip.pickup || match.data.origin || "",
@@ -445,7 +446,7 @@ app.post("/trips/sync", requireApiKey, async (req, res) => {
         {
           source: "trips",
           amazonTripId: trip.tripId,
-          driverName: trip.driver || "",
+          driverName: normalizeDriverName(trip.driver || ""),
           status: trip.status || "seen_in_trips",
           origin: trip.pickup || "",
           destination: trip.dropoff || "",
@@ -468,8 +469,6 @@ app.post("/trips/sync", requireApiKey, async (req, res) => {
       tripOnly += 1;
     }
   }
-
-  await markMissingFromTrips(trips.map((trip) => trip.tripId).filter(Boolean) as string[]);
 
   res.json({
     ok: true,
@@ -506,8 +505,7 @@ async function findMatchingLoad(trip: RelayTrip) {
 }
 
 async function findExistingLoadByIds(tripId: string, loadId: string) {
-  const normalizedTripId = String(tripId || "").trim();
-  if (normalizedTripId) {
+  for (const normalizedTripId of tripIdVariants(tripId)) {
     const byTrip = await db.collection("loads").where("amazonTripId", "==", normalizedTripId).limit(1).get();
     if (!byTrip.empty) {
       const doc = byTrip.docs[0];
@@ -515,8 +513,7 @@ async function findExistingLoadByIds(tripId: string, loadId: string) {
     }
   }
 
-  const normalizedLoadId = String(loadId || "").trim();
-  if (normalizedLoadId) {
+  for (const normalizedLoadId of tripIdVariants(loadId)) {
     const byLoad = await db.collection("loads").where("amazonLoadId", "==", normalizedLoadId).limit(1).get();
     if (!byLoad.empty) {
       const doc = byLoad.docs[0];
@@ -525,6 +522,13 @@ async function findExistingLoadByIds(tripId: string, loadId: string) {
   }
 
   return null;
+}
+
+function tripIdVariants(value: string) {
+  const id = String(value || "").trim().toUpperCase();
+  if (!id) return [];
+  const withoutPrefix = id.replace(/^T-/, "");
+  return [...new Set([id, withoutPrefix, `T-${withoutPrefix}`])];
 }
 
 function sourceHas(source: unknown, value: "gmail" | "trips") {
@@ -537,31 +541,6 @@ function mergeSource(source: unknown, value: "gmail" | "trips") {
   if (parts.has("gmail") && parts.has("trips")) return "gmail+trips";
   if (parts.has("trips")) return "trips";
   return "gmail";
-}
-
-async function markMissingFromTrips(seenTripIds: string[]) {
-  if (seenTripIds.length === 0) return;
-  const gmailLoads = await db.collection("loads").where("source", "==", "gmail").get();
-  const seen = new Set(seenTripIds);
-  const batch = db.batch();
-
-  gmailLoads.docs.forEach((doc) => {
-    const data = doc.data();
-    const tripId = data.amazonTripId || data.amazonLoadId || "";
-    if (tripId && !seen.has(tripId)) {
-      batch.set(
-        doc.ref,
-        {
-          missingFromTrips: true,
-          status: "Needs review",
-          updatedAt: now()
-        },
-        { merge: true }
-      );
-    }
-  });
-
-  await batch.commit();
 }
 
 async function upsertGmailLoad(load: GmailLoad) {
@@ -585,7 +564,7 @@ async function upsertGmailLoad(load: GmailLoad) {
     payout: existingData.payout ?? load.payout ?? null,
     pickupDate: load.pickupDate || existingData.pickupDate || "",
     bookedAt: load.bookedAt || existingData.bookedAt || "",
-    driverName: existingData.driverName || load.driverName || "",
+    driverName: normalizeDriverName(existingData.driverName || load.driverName || ""),
     status: hasTripsData ? existingData.status || "seen_in_trips" : existingData.status || load.status,
     invoiceStatus: existingData.invoiceStatus || load.invoiceStatus || "Unmatched",
     paid: Boolean(existingData.paid || load.paid),
@@ -676,6 +655,16 @@ function parseMoney(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;
   const number = Number(String(value).replace(/[$,]/g, ""));
   return Number.isFinite(number) ? number : null;
+}
+
+function normalizeDriverName(value: unknown) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  const normalized = text.replace(/[^a-z]/gi, "").toLowerCase();
+  if (normalized === "rsingh" || normalized === "ranjitsingh" || normalized === "rajitsingh") {
+    return "RANJIT SINGH";
+  }
+  return text.toUpperCase();
 }
 
 function normalizeEmailText(value: string) {

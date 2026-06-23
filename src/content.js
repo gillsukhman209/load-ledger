@@ -11,7 +11,8 @@ const STATE = {
   lastSyncAt: null,
   lastSyncResult: null,
   intervalId: null,
-  injectionComplete: false
+  injectionComplete: false,
+  pageScopeKey: ""
 };
 
 const LOG_PREFIX = "[Relay Trips Ledger]";
@@ -20,6 +21,7 @@ init();
 
 async function init() {
   log("content script started", { url: window.location.href, isTripsPage: isTripsPage() });
+  refreshPageScope();
   injectPageHook();
   window.addEventListener("message", onPageMessage);
   chrome.runtime.onMessage.addListener(onRuntimeMessage);
@@ -48,6 +50,7 @@ function injectPageHook() {
 function onPageMessage(event) {
   if (event.source !== window) return;
   if (event.data?.type !== "RELAY_TRIPS_LEDGER_RESPONSE") return;
+  refreshPageScope();
   const trips = extractTrips(event.data.payload, event.data.url);
   if (trips.length === 0) {
     log("captured Relay JSON response, but no TOUR entities were found", { url: event.data.url });
@@ -60,6 +63,34 @@ function onPageMessage(event) {
   });
   upsertTrips(trips);
   syncTrips("network").catch((error) => warn("network-triggered sync failed", error));
+}
+
+function refreshPageScope() {
+  const nextKey = currentPageScopeKey();
+  if (!STATE.pageScopeKey) {
+    STATE.pageScopeKey = nextKey;
+    return;
+  }
+  if (STATE.pageScopeKey !== nextKey) {
+    log("Relay page scope changed; clearing cached trips", {
+      previousScope: STATE.pageScopeKey,
+      nextScope: nextKey,
+      previousCachedTrips: STATE.tripsById.size
+    });
+    STATE.tripsById.clear();
+    STATE.pageScopeKey = nextKey;
+  }
+}
+
+function currentPageScopeKey() {
+  try {
+    const url = new URL(window.location.href);
+    const keys = ["hstrtdt", "henddt", "asstrtdt", "asenddt", "aslctntyp", "hsrtb", "hsrtdrctn"];
+    const parts = keys.map((key) => `${key}=${url.searchParams.get(key) || ""}`);
+    return `${url.pathname}?${parts.join("&")}`;
+  } catch (_error) {
+    return window.location.href;
+  }
 }
 
 function onRuntimeMessage(message, _sender, sendResponse) {
@@ -301,6 +332,7 @@ function roundCurrency(value) {
 }
 
 function upsertTrips(trips) {
+  refreshPageScope();
   const now = new Date().toISOString();
   let inserted = 0;
   let updated = 0;
@@ -310,6 +342,7 @@ function upsertTrips(trips) {
     else inserted += 1;
     STATE.tripsById.set(trip.tripId, {
       ...mergeTrip(existing, trip),
+      sourcePageKey: STATE.pageScopeKey,
       firstSeenAt: existing?.firstSeenAt || now,
       lastSyncedAt: now
     });
@@ -336,6 +369,7 @@ function mergeTrip(existing = {}, incoming = {}) {
 }
 
 function scanDomForTrips() {
+  refreshPageScope();
   if (!document.body) {
     log("DOM scan skipped because document.body is not ready");
     return;
@@ -427,6 +461,7 @@ function parseDomTripRow(tripId, text) {
 }
 
 async function syncTrips(reason) {
+  refreshPageScope();
   log("sync requested", { reason, cachedTrips: STATE.tripsById.size });
   const settings = await getSettings();
   if (!settings.backendBaseUrl) {
@@ -436,7 +471,8 @@ async function syncTrips(reason) {
   }
 
   scanDomForTrips();
-  const trips = filterTripsByDate([...STATE.tripsById.values()], settings.dateRangeDays);
+  const scopedTrips = [...STATE.tripsById.values()].filter((trip) => !trip.sourcePageKey || trip.sourcePageKey === STATE.pageScopeKey);
+  const trips = hasExplicitRelayDateRange() ? scopedTrips : filterTripsByDate(scopedTrips, settings.dateRangeDays);
   if (trips.length === 0) {
     STATE.lastSyncResult = { ok: true, reason, sent: 0 };
     log("sync skipped: no trips to send", { reason });
@@ -473,6 +509,15 @@ async function syncTrips(reason) {
   await chrome.storage.local.set({ lastSyncAt: STATE.lastSyncAt, lastSyncResult: STATE.lastSyncResult });
   log("sync completed", STATE.lastSyncResult);
   return STATE.lastSyncResult;
+}
+
+function hasExplicitRelayDateRange() {
+  try {
+    const params = new URL(window.location.href).searchParams;
+    return Boolean((params.get("hstrtdt") && params.get("henddt")) || (params.get("asstrtdt") && params.get("asenddt")));
+  } catch (_error) {
+    return false;
+  }
 }
 
 function filterTripsByDate(trips, dateRangeDays) {

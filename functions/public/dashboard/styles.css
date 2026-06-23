@@ -18,10 +18,13 @@
 
 body {
   margin: 0;
-  min-width: 1040px;
   background: var(--page);
   color: var(--ink);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+[hidden] {
+  display: none !important;
 }
 
 button,
@@ -49,6 +52,7 @@ button:hover {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
   padding: 18px 28px;
   background: #092f3f;
   color: #fff;
@@ -68,6 +72,8 @@ button:hover {
 
 .topbar-actions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 10px;
 }
 
@@ -121,7 +127,7 @@ button:focus {
 
 .summary-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(150px, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -145,13 +151,25 @@ button:focus {
   margin-top: 6px;
   font-size: 24px;
   letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+
+.filter-shell {
+  margin: 16px 0;
+}
+
+.section-toggle {
+  width: auto;
+  min-width: 120px;
+  background: #fff;
+  color: var(--blue);
 }
 
 .controls {
   display: grid;
-  grid-template-columns: minmax(240px, 2fr) repeat(7, minmax(118px, 1fr));
+  grid-template-columns: minmax(220px, 2fr) repeat(7, minmax(110px, 1fr));
   gap: 12px;
-  margin: 16px 0;
+  margin-top: 10px;
   padding: 14px;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -160,65 +178,12 @@ button:focus {
 }
 
 .workbench {
-  display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
-  gap: 16px;
-}
-
-.side-panel {
-  display: grid;
-  align-content: start;
-  gap: 12px;
-}
-
-.side-panel h2 {
-  margin: 10px 0 0;
-  font-size: 14px;
-  letter-spacing: 0;
-}
-
-.driver-list,
-.account-list,
-.scan-list {
-  display: grid;
-  gap: 8px;
-}
-
-.driver-item,
-.account-item,
-.scan-item {
-  display: grid;
-  gap: 4px;
-  padding: 11px 12px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  box-shadow: var(--shadow);
-}
-
-.driver-item div,
-.account-item div,
-.scan-item div {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.driver-item strong,
-.account-item strong,
-.scan-item strong {
-  font-size: 13px;
-}
-
-.driver-item span,
-.account-item span,
-.scan-item span {
-  color: var(--muted);
-  font-size: 12px;
+  display: block;
 }
 
 .table-wrap {
   overflow: auto;
+  max-width: 100%;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -227,8 +192,9 @@ button:focus {
 
 table {
   width: 100%;
-  min-width: 1160px;
+  min-width: 940px;
   border-collapse: collapse;
+  table-layout: fixed;
 }
 
 th,
@@ -238,6 +204,9 @@ td {
   text-align: left;
   vertical-align: middle;
   font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 th {
@@ -276,8 +245,39 @@ tbody tr:hover {
   background: #f8fbfd;
 }
 
+.week-row td {
+  padding: 0;
+  background: #f6f9fc;
+  border-bottom-color: #cfd8e3;
+  white-space: normal;
+}
+
+.week-row:hover {
+  background: #f6f9fc;
+}
+
+.week-summary {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-height: 40px;
+  padding: 10px 12px;
+  color: #344054;
+  font-size: 12px;
+}
+
+.week-summary strong {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.week-summary span {
+  color: var(--muted);
+  font-weight: 700;
+}
+
 td[data-field="payout"] {
-  text-align: right;
+  text-align: left;
   font-variant-numeric: tabular-nums;
   font-weight: 700;
 }
@@ -324,14 +324,26 @@ td[data-field="trip"] {
   color: var(--green);
 }
 
-td input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
-}
-
 td input[type="text"],
 td select {
   min-width: 130px;
+}
+
+.note-button {
+  height: 30px;
+  padding: 0 10px;
+  background: #fff;
+  color: var(--blue);
+}
+
+.note-button.has-note {
+  background: #e0f2fe;
+}
+
+td input[data-action="notes"] {
+  display: block;
+  min-width: 160px;
+  max-width: 220px;
 }
 
 .empty-state {
@@ -341,15 +353,90 @@ td select {
 }
 
 @media (max-width: 1200px) {
-  body {
-    min-width: 960px;
+  .controls,
+  .settings-panel {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .topbar {
+    align-items: flex-start;
+    padding: 14px;
   }
 
-  .workbench {
+  .topbar h1 {
+    font-size: 19px;
+  }
+
+  .topbar-actions {
+    width: 100%;
+  }
+
+  .topbar-actions button {
+    flex: 1 1 calc(50% - 6px);
+    min-width: 128px;
+    padding: 0 10px;
+  }
+
+  main {
+    padding: 12px;
+  }
+
+  .summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .summary-grid article {
+    padding: 12px;
+  }
+
+  .summary-grid strong {
+    font-size: 20px;
+  }
+
+  .controls,
+  .settings-panel,
+  .settings-panel {
     grid-template-columns: 1fr;
   }
 
-  .side-panel {
-    grid-template-columns: 1fr 1fr;
+  .workbench {
+    gap: 12px;
+  }
+
+  table {
+    min-width: 820px;
+  }
+
+  th,
+  td {
+    padding: 8px;
+    font-size: 12px;
+  }
+
+  .week-summary {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  td input[type="text"],
+  td select {
+    min-width: 110px;
+  }
+}
+
+@media (max-width: 430px) {
+  .topbar {
+    display: grid;
+  }
+
+  .topbar-actions button {
+    flex-basis: 100%;
+  }
+
+  .summary-grid {
+    grid-template-columns: 1fr;
   }
 }

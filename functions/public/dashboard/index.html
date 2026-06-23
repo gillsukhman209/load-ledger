@@ -17,7 +17,7 @@
         <button id="syncGmailButton" type="button">Sync Gmail</button>
         <button id="clearGmailButton" type="button">Clear Gmail Imports</button>
         <button id="refreshButton" type="button">Refresh</button>
-        <button id="settingsButton" type="button">Settings</button>
+        <button id="settingsButton" type="button" aria-expanded="false" aria-controls="settingsPanel">Settings</button>
       </div>
     </header>
 
@@ -65,85 +65,70 @@
         </article>
       </section>
 
-      <section class="controls" aria-label="Filters">
-        <label>
-          Search
-          <input id="searchInput" type="search" placeholder="Trip, driver, city, status">
-        </label>
-        <label>
-          Driver
-          <select id="driverFilter">
-            <option value="">All drivers</option>
-          </select>
-        </label>
-        <label>
-          Status
-          <select id="statusFilter">
-            <option value="">All statuses</option>
-          </select>
-        </label>
-        <label>
-          Pay
-          <select id="paidFilter">
-            <option value="">All</option>
-            <option value="unpaid">Unpaid</option>
-            <option value="paid">Paid</option>
-          </select>
-        </label>
-        <label>
-          Invoice
-          <select id="invoiceFilter">
-            <option value="">All invoices</option>
-            <option value="Unmatched">Unmatched</option>
-            <option value="Matched">Matched</option>
-            <option value="Disputed">Disputed</option>
-            <option value="Paid">Paid</option>
-          </select>
-        </label>
-        <label>
-          Source
-          <select id="sourceFilter">
-            <option value="">All sources</option>
-            <option value="trips">Trips</option>
-            <option value="gmail">Gmail</option>
-            <option value="missing">Gmail missing from Trips</option>
-          </select>
-        </label>
-        <label>
-          Sort by
-          <select id="sortField">
-            <option value="start">Start date</option>
-            <option value="end">End date</option>
-            <option value="payout">Payout</option>
-            <option value="driver">Driver</option>
-            <option value="trip">Trip ID</option>
-            <option value="pickup">Pickup</option>
-            <option value="dropoff">Dropoff</option>
-            <option value="status">Status</option>
-            <option value="source">Source</option>
-            <option value="invoice">Invoice</option>
-            <option value="paid">Paid</option>
-          </select>
-        </label>
-        <label>
-          Direction
-          <select id="sortDirection">
-            <option value="desc">Descending</option>
-            <option value="asc">Ascending</option>
-          </select>
-        </label>
+      <section class="filter-shell" aria-label="Filters">
+        <button id="filtersButton" class="section-toggle" type="button" aria-expanded="false" aria-controls="filtersPanel">Show filters</button>
+        <div class="controls" id="filtersPanel" hidden>
+          <label>
+            Search
+            <input id="searchInput" type="search" placeholder="Trip, driver, city, status">
+          </label>
+          <label>
+            Driver
+            <select id="driverFilter">
+              <option value="">All drivers</option>
+            </select>
+          </label>
+          <label>
+            Status
+            <select id="statusFilter">
+              <option value="">All statuses</option>
+            </select>
+          </label>
+          <label>
+            Invoice
+            <select id="invoiceFilter">
+              <option value="">All invoices</option>
+              <option value="Unmatched">Unmatched</option>
+              <option value="Matched">Matched</option>
+              <option value="Disputed">Disputed</option>
+              <option value="Paid">Paid</option>
+            </select>
+          </label>
+          <label>
+            Source
+            <select id="sourceFilter">
+              <option value="">All sources</option>
+              <option value="trips">Trips</option>
+              <option value="gmail">Gmail</option>
+              <option value="missing">Gmail missing from Trips</option>
+            </select>
+          </label>
+          <label>
+            Sort by
+            <select id="sortField">
+              <option value="start">Start date</option>
+              <option value="end">End date</option>
+              <option value="payout">Payout</option>
+              <option value="driver">Driver</option>
+              <option value="trip">Trip ID</option>
+              <option value="pickup">Pickup</option>
+              <option value="dropoff">Dropoff</option>
+              <option value="status">Status</option>
+              <option value="source">Source</option>
+              <option value="invoice">Invoice</option>
+            </select>
+          </label>
+          <label>
+            Direction
+            <select id="sortDirection">
+              <option value="desc">Descending</option>
+              <option value="asc">Ascending</option>
+            </select>
+          </label>
+        </div>
       </section>
 
       <section class="workbench">
-        <aside class="side-panel">
-          <h2>Gmail</h2>
-          <div id="gmailAccounts" class="account-list"></div>
-          <h2>Driver Totals</h2>
-          <div id="driverTotals" class="driver-list"></div>
-          <h2>Recent Syncs</h2>
-          <div id="recentScans" class="scan-list"></div>
-        </aside>
-
         <section class="table-wrap" aria-label="Loads">
           <table>
             <thead>
@@ -153,12 +138,10 @@
                 <th><button class="sort-header" data-sort="pickup" type="button">Pickup</button></th>
                 <th><button class="sort-header" data-sort="dropoff" type="button">Dropoff</button></th>
                 <th><button class="sort-header" data-sort="start" type="button">Start</button></th>
-                <th><button class="sort-header" data-sort="end" type="button">End</button></th>
                 <th><button class="sort-header" data-sort="payout" type="button">Payout</button></th>
                 <th><button class="sort-header" data-sort="status" type="button">Status</button></th>
                 <th><button class="sort-header" data-sort="source" type="button">Source</button></th>
                 <th><button class="sort-header" data-sort="invoice" type="button">Invoice</button></th>
-                <th><button class="sort-header" data-sort="paid" type="button">Paid</button></th>
                 <th>Notes</th>
               </tr>
             </thead>
@@ -176,7 +159,6 @@
         <td data-field="origin"></td>
         <td data-field="destination"></td>
         <td data-field="start"></td>
-        <td data-field="end"></td>
         <td data-field="payout"></td>
         <td data-field="status"></td>
         <td data-field="source"></td>
@@ -189,10 +171,8 @@
           </select>
         </td>
         <td>
-          <input data-action="paid" type="checkbox" aria-label="Paid">
-        </td>
-        <td>
-          <input data-action="notes" type="text" placeholder="Add note">
+          <button class="note-button" data-action="show-note" type="button">Note</button>
+          <input data-action="notes" type="text" placeholder="Add note" hidden>
         </td>
       </tr>
     </template>

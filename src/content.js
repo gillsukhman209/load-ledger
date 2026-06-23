@@ -8,11 +8,17 @@ const DEFAULT_SETTINGS = {
 
 const STATE = {
   tripsById: new Map(),
+  settlementsById: new Map(),
   lastSyncAt: null,
   lastSyncResult: null,
   intervalId: null,
+  urlWatchIntervalId: null,
+  tripRescanTimerId: null,
+  mutationObserver: null,
   injectionComplete: false,
-  pageScopeKey: ""
+  pageScopeKey: "",
+  lastLocationHref: window.location.href,
+  lastDomSignature: ""
 };
 
 const LOG_PREFIX = "[Relay Trips Ledger]";
@@ -29,9 +35,64 @@ async function init() {
   const settings = await getSettings();
   log("settings loaded", sanitizeSettings(settings));
   scheduleAutoSync(settings);
+  startTripAutoScanner();
 
-  setTimeout(scanDomForTrips, 2500);
-  setTimeout(() => syncTrips("page-open"), 5000);
+  setTimeout(() => {
+    if (isTripsPage()) scanDomForTrips();
+  }, 2500);
+  setTimeout(() => {
+    if (isTripsPage()) syncTrips("page-open");
+  }, 5000);
+}
+
+function startTripAutoScanner() {
+  if (STATE.urlWatchIntervalId) window.clearInterval(STATE.urlWatchIntervalId);
+  STATE.urlWatchIntervalId = window.setInterval(() => {
+    if (STATE.lastLocationHref === window.location.href) return;
+    const previousUrl = STATE.lastLocationHref;
+    STATE.lastLocationHref = window.location.href;
+    log("Relay URL changed", { previousUrl, nextUrl: STATE.lastLocationHref, isTripsPage: isTripsPage() });
+    if (isTripsPage()) scheduleTripRescanSync("trip-page-url-change", 1800);
+  }, 750);
+
+  if (STATE.mutationObserver) STATE.mutationObserver.disconnect();
+  STATE.mutationObserver = new MutationObserver(() => {
+    if (!isTripsPage()) return;
+    scheduleTripRescanSync("trip-page-dom-change", 1800);
+  });
+
+  if (document.body) {
+    STATE.mutationObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+  } else {
+    window.setTimeout(startTripAutoScanner, 500);
+  }
+}
+
+function scheduleTripRescanSync(reason, delayMs = 1500) {
+  if (STATE.tripRescanTimerId) window.clearTimeout(STATE.tripRescanTimerId);
+  STATE.tripRescanTimerId = window.setTimeout(async () => {
+    if (!isTripsPage()) return;
+    refreshPageScope();
+    const signature = visibleTripsSignature();
+    if (!signature || signature === STATE.lastDomSignature) return;
+    STATE.lastDomSignature = signature;
+    log("visible Trips page changed; scanning and syncing", { reason, signature });
+    scanDomForTrips();
+    try {
+      await syncTrips(reason);
+    } catch (error) {
+      warn("auto Trips sync failed", error);
+    }
+  }, delayMs);
+}
+
+function visibleTripsSignature() {
+  if (!document.body) return "";
+  const text = document.body.innerText || "";
+  const ids = [...new Set(text.match(/\b(?:T-[A-Z0-9]+|[0-9A-Z]{9})\b/g) || [])].sort();
+  if (ids.length === 0) return "";
+  const dateRange = text.match(/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\s*-\s*(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)?\s*\d{1,2}\b/i)?.[0] || "";
+  return `${currentPageScopeKey()}|${dateRange}|${ids.join(",")}`;
 }
 
 function injectPageHook() {
@@ -51,9 +112,21 @@ function onPageMessage(event) {
   if (event.source !== window) return;
   if (event.data?.type !== "RELAY_TRIPS_LEDGER_RESPONSE") return;
   refreshPageScope();
+  const settlements = extractSettlements(event.data.payload, event.data.url);
+  if (settlements.length > 0) {
+    log("parsed settlements from Relay Payments JSON", {
+      count: settlements.length,
+      settlementIds: settlements.map((settlement) => settlement.settlementId),
+      url: event.data.url
+    });
+    upsertSettlements(settlements);
+    syncSettlements("network").catch((error) => warn("network-triggered payment sync failed", error));
+    return;
+  }
+
   const trips = extractTrips(event.data.payload, event.data.url);
   if (trips.length === 0) {
-    log("captured Relay JSON response, but no TOUR entities were found", { url: event.data.url });
+    log("captured Relay JSON response, but no trip or payment entities were found", { url: event.data.url });
     return;
   }
   log("parsed trips from Relay JSON", {
@@ -143,6 +216,7 @@ function scheduleAutoSync(settings) {
   const intervalMs = Math.max(1, minutes) * 60 * 1000;
   log("auto-sync scheduled", { everyMinutes: Math.max(1, minutes) });
   STATE.intervalId = window.setInterval(() => {
+    if (!isTripsPage()) return;
     log("auto-sync interval fired");
     scanDomForTrips();
     syncTrips("interval").catch((error) => warn("interval sync failed", error));
@@ -152,6 +226,108 @@ function scheduleAutoSync(settings) {
 function extractTrips(payload, responseUrl = "") {
   const entities = collectTripEntities(payload);
   return entities.map((entity) => normalizeTripEntity(entity, responseUrl)).filter(Boolean);
+}
+
+function extractSettlements(payload, responseUrl = "") {
+  if (!payload || typeof payload !== "object") return [];
+  const settlements = collectSettlementEntities(payload);
+  return settlements.map((settlement) => normalizeSettlement(settlement, responseUrl)).filter(Boolean);
+}
+
+function collectSettlementEntities(value, found = []) {
+  if (!value || typeof value !== "object") return found;
+
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectSettlementEntities(item, found));
+    return found;
+  }
+
+  if (Array.isArray(value.settlementList)) {
+    value.settlementList.forEach((item) => collectSettlementEntities(item, found));
+  }
+
+  if (value.id && value.settlementsMetadata && (value.totalAmount || value.paymentStatus || value.invoiceStatus)) {
+    found.push(value);
+  }
+
+  return found;
+}
+
+function normalizeSettlement(settlement, responseUrl) {
+  const settlementId = String(settlement.id || "").trim();
+  if (!settlementId) return null;
+
+  const metadata = settlement.settlementsMetadata || {};
+  const context = parseAmazonWeekContext(metadata.contextId);
+  const paymentStatus = String(settlement.paymentStatus || "").trim().toUpperCase();
+  const amount = numberOrNull(settlement.totalAmount?.value);
+
+  return {
+    settlementId,
+    carrierId: settlement.carrierId || "",
+    paymentAccountType: settlement.paymentAccountType || "",
+    invoiceStatus: settlement.invoiceStatus || "",
+    paymentStatus,
+    displayStatus: paymentStatus === "INITIATED" ? "Paid" : paymentStatus === "PENDING" ? "Pending" : titleCase(paymentStatus.toLowerCase()),
+    amount: amount == null ? null : roundCurrency(amount),
+    amountExcludingTax: numberOrNull(settlement.totalAmountExcludingTax?.value),
+    contextId: metadata.contextId || "",
+    contextYear: context.year || "",
+    contextWeek: context.week || "",
+    weekStartDate: context.weekStartDate || "",
+    weekEndDate: context.weekEndDate || "",
+    billingCycle: metadata.billingCycle || "",
+    workType: metadata.workType || "",
+    settlementNumber: metadata.settlementNumber || "",
+    invoiceBillingType: metadata.invoiceBillingType || "",
+    friendlyDisputeId: cleanSettlementMetadataValue(metadata.friendlyDisputeId),
+    vrIds: splitIds(metadata.vrIds),
+    tourIds: splitIds(metadata.tourIds),
+    invoiceDate: settlement.invoiceDate || "",
+    expectedPaymentDate: settlement.expectedPaymentDate || "",
+    paymentInitiationDate: settlement.paymentInitiationDate || "",
+    creditNote: Boolean(settlement.creditNote),
+    sourceUrl: responseUrl,
+    lastSyncedAt: new Date().toISOString()
+  };
+}
+
+function parseAmazonWeekContext(contextId) {
+  const match = String(contextId || "").match(/^(\d{4})#(\d{1,2})$/);
+  if (!match) return {};
+  const year = Number(match[1]);
+  const week = Number(match[2]);
+  if (!Number.isFinite(year) || !Number.isFinite(week)) return {};
+
+  const janFirst = new Date(year, 0, 1, 12);
+  const firstWeekStart = new Date(year, 0, 1 - janFirst.getDay(), 12);
+  const weekStart = new Date(firstWeekStart.getFullYear(), firstWeekStart.getMonth(), firstWeekStart.getDate() + (week - 1) * 7, 12);
+  const weekEnd = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + 6, 12);
+  return {
+    year,
+    week,
+    weekStartDate: isoDateKey(weekStart),
+    weekEndDate: isoDateKey(weekEnd)
+  };
+}
+
+function isoDateKey(date) {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+function splitIds(value) {
+  return [...new Set(String(value || "")
+    .split(",")
+    .map((item) => item.trim().toUpperCase())
+    .filter(Boolean))];
+}
+
+function cleanSettlementMetadataValue(value) {
+  const text = String(value || "").trim();
+  if (!text || text.includes("TFP_NULL")) return "";
+  return text;
 }
 
 function collectTripEntities(value, found = []) {
@@ -233,6 +409,7 @@ function normalizeLoad(load, responseUrl) {
 
   return {
     tripId,
+    parentTourId: load.tourId || load.parentTourId || "",
     driver: formatDriver(firstDriver),
     status: inferStatus(load, responseUrl),
     pickup: formatLocation(firstPickup?.location, firstPickup?.locationCode),
@@ -350,6 +527,24 @@ function upsertTrips(trips) {
   if (trips.length > 0) {
     log("cached trips", { inserted, updated, totalCached: STATE.tripsById.size });
   }
+}
+
+function upsertSettlements(settlements) {
+  const now = new Date().toISOString();
+  let inserted = 0;
+  let updated = 0;
+  for (const settlement of settlements) {
+    const existing = STATE.settlementsById.get(settlement.settlementId);
+    if (existing) updated += 1;
+    else inserted += 1;
+    STATE.settlementsById.set(settlement.settlementId, {
+      ...existing,
+      ...settlement,
+      firstSeenAt: existing?.firstSeenAt || now,
+      lastSyncedAt: now
+    });
+  }
+  log("cached settlements", { inserted, updated, totalCached: STATE.settlementsById.size });
 }
 
 function mergeTrip(existing = {}, incoming = {}) {
@@ -509,6 +704,48 @@ async function syncTrips(reason) {
   await chrome.storage.local.set({ lastSyncAt: STATE.lastSyncAt, lastSyncResult: STATE.lastSyncResult });
   log("sync completed", STATE.lastSyncResult);
   return STATE.lastSyncResult;
+}
+
+async function syncSettlements(reason) {
+  const settings = await getSettings();
+  if (!settings.backendBaseUrl) {
+    warn("payment sync skipped: missing Firebase backend URL", sanitizeSettings(settings));
+    return { ok: false, reason: "Missing Firebase backend URL" };
+  }
+
+  const settlements = [...STATE.settlementsById.values()];
+  if (settlements.length === 0) {
+    log("payment sync skipped: no settlements to send", { reason });
+    return { ok: true, reason, sent: 0 };
+  }
+
+  log("sending settlements to Firebase backend", {
+    reason,
+    count: settlements.length,
+    settlementIds: settlements.map((settlement) => settlement.settlementId),
+    backendBaseUrl: settings.backendBaseUrl
+  });
+
+  const body = await chrome.runtime.sendMessage({
+    type: "RELAY_LEDGER_POST_PAYMENTS_SYNC",
+    backendBaseUrl: settings.backendBaseUrl,
+    apiKey: settings.apiKey,
+    payload: {
+      source: "amazon-relay-payments-ledger-extension",
+      reason,
+      pageUrl: window.location.href,
+      syncedAt: new Date().toISOString(),
+      settlements
+    }
+  });
+
+  if (!body?.ok) {
+    warn("Firebase backend returned a payment sync error", body);
+    throw new Error(body?.error || "Payment sync failed");
+  }
+
+  log("payment sync completed", body);
+  return body;
 }
 
 function hasExplicitRelayDateRange() {

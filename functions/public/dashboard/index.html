@@ -90,6 +90,7 @@
               <option value="">All invoices</option>
               <option value="Unmatched">Unmatched</option>
               <option value="Matched">Matched</option>
+              <option value="Pending">Pending</option>
               <option value="Disputed">Disputed</option>
               <option value="Paid">Paid</option>
             </select>
@@ -100,7 +101,14 @@
               <option value="">All sources</option>
               <option value="trips">Trips</option>
               <option value="gmail">Gmail</option>
+              <option value="settlements">Settlements</option>
               <option value="missing">Gmail missing from Trips</option>
+            </select>
+          </label>
+          <label>
+            Month
+            <select id="monthFilter">
+              <option value="">All months</option>
             </select>
           </label>
           <label>
@@ -114,7 +122,6 @@
               <option value="pickup">Pickup</option>
               <option value="dropoff">Dropoff</option>
               <option value="status">Status</option>
-              <option value="source">Source</option>
               <option value="invoice">Invoice</option>
             </select>
           </label>
@@ -154,23 +161,24 @@
 
     <template id="loadRowTemplate">
       <tr>
-        <td data-field="trip"></td>
-        <td data-field="driver"></td>
-        <td data-field="origin"></td>
-        <td data-field="destination"></td>
-        <td data-field="start"></td>
-        <td data-field="payout"></td>
-        <td data-field="status"></td>
-        <td data-field="source"></td>
-        <td>
+        <td data-field="trip" data-label="Trip"></td>
+        <td data-field="driver" data-label="Driver"></td>
+        <td data-field="origin" data-label="Pickup"></td>
+        <td data-field="destination" data-label="Dropoff"></td>
+        <td data-field="start" data-label="Start"></td>
+        <td data-field="payout" data-label="Payout"></td>
+        <td data-field="status" data-label="Status"></td>
+        <td data-field="source" data-label="Source"></td>
+        <td data-label="Invoice">
           <select data-action="invoice">
             <option>Unmatched</option>
             <option>Matched</option>
+            <option>Pending</option>
             <option>Disputed</option>
             <option>Paid</option>
           </select>
         </td>
-        <td>
+        <td data-label="Notes">
           <button class="note-button" data-action="show-note" type="button">Note</button>
           <input data-action="notes" type="text" placeholder="Add note" hidden>
         </td>

@@ -5,6 +5,7 @@ const state = {
   gmailLookbackDays: Number(localStorage.getItem("relayLedgerGmailLookbackDays") || 365),
   gmailMaxResults: Number(localStorage.getItem("relayLedgerGmailMaxResults") || 2000),
   loads: [],
+  settlements: [],
   scans: [],
   accounts: [],
   filters: {
@@ -12,7 +13,8 @@ const state = {
     driver: "",
     status: "",
     invoice: "",
-    source: ""
+    source: "",
+    month: ""
   },
   sort: {
     field: localStorage.getItem("relayLedgerSortField") || "start",
@@ -45,6 +47,7 @@ const elements = {
   statusFilter: document.querySelector("#statusFilter"),
   invoiceFilter: document.querySelector("#invoiceFilter"),
   sourceFilter: document.querySelector("#sourceFilter"),
+  monthFilter: document.querySelector("#monthFilter"),
   sortField: document.querySelector("#sortField"),
   sortDirection: document.querySelector("#sortDirection"),
   sortHeaders: [...document.querySelectorAll("[data-sort]")],
@@ -111,6 +114,10 @@ elements.sourceFilter.addEventListener("change", (event) => {
   state.filters.source = event.target.value;
   render();
 });
+elements.monthFilter.addEventListener("change", (event) => {
+  state.filters.month = event.target.value;
+  render();
+});
 elements.sortField.addEventListener("change", (event) => {
   state.sort.field = event.target.value;
   persistSort();
@@ -142,12 +149,14 @@ loadDashboard();
 async function loadDashboard() {
   setStatus("Loading ledger...");
   try {
-    const [loads, scans, accounts] = await Promise.all([
-      apiGet("/loads?limit=500"),
+    const [loads, scans, accounts, settlements] = await Promise.all([
+      apiGet("/loads?limit=2500"),
       apiGet("/tripScans?limit=10"),
-      apiGet("/gmail/accounts")
+      apiGet("/gmail/accounts"),
+      apiGet("/settlements?limit=500")
     ]);
     state.loads = Array.isArray(loads.loads) ? loads.loads : [];
+    state.settlements = Array.isArray(settlements.settlements) ? settlements.settlements : [];
     state.scans = Array.isArray(scans.scans) ? scans.scans : [];
     state.accounts = Array.isArray(accounts.accounts) ? accounts.accounts : [];
     populateFilterOptions();
@@ -262,10 +271,13 @@ function defaultBackendUrl() {
 }
 
 function populateFilterOptions() {
-  replaceOptions(elements.driverFilter, "All drivers", uniqueValues(state.loads.map((load) => displayDriver(load.driverName))));
-  replaceOptions(elements.statusFilter, "All statuses", uniqueValues(state.loads.map((load) => load.status || "Unknown")));
+  const loads = ledgerLoads();
+  replaceOptions(elements.driverFilter, "All drivers", uniqueValues(loads.map((load) => displayDriver(load.driverName))));
+  replaceOptions(elements.statusFilter, "All statuses", uniqueValues(loads.map((load) => displayStatusLabel(load))));
+  replaceOptionsFromPairs(elements.monthFilter, "All months", monthFilterOptions());
   elements.driverFilter.value = state.filters.driver;
   elements.statusFilter.value = state.filters.status;
+  elements.monthFilter.value = state.filters.month;
 }
 
 function replaceOptions(select, label, values) {
@@ -273,6 +285,25 @@ function replaceOptions(select, label, values) {
   select.replaceChildren(new Option(label, ""));
   values.forEach((value) => select.append(new Option(value, value)));
   select.value = values.includes(previous) ? previous : "";
+}
+
+function replaceOptionsFromPairs(select, label, pairs) {
+  const previous = select.value;
+  select.replaceChildren(new Option(label, ""));
+  pairs.forEach((pair) => select.append(new Option(pair.label, pair.value)));
+  select.value = pairs.some((pair) => pair.value === previous) ? previous : "";
+}
+
+function monthFilterOptions() {
+  const months = new Map();
+  ledgerLoads().forEach((load) => {
+    const week = weekRangeForLoad(load);
+    if (week.monthKey && week.monthLabel) {
+      months.set(week.monthKey, { value: week.monthKey, label: week.monthLabel, sort: week.monthSort });
+    }
+  });
+
+  return [...months.values()].sort((a, b) => b.sort - a.sort);
 }
 
 function render() {
@@ -311,9 +342,9 @@ function sortValue(load, field) {
     case "end":
       return sortableDate(load.tripEndDate || "");
     case "payout":
-      return moneyValue(load.payout);
+      return ledgerPayout(load);
     case "status":
-      return load.missingFromTrips ? "Needs review" : load.status || "";
+      return displayStatusLabel(load);
     case "source":
       return load.source || "trips";
     case "invoice":
@@ -341,7 +372,7 @@ function defaultDirectionFor(field) {
 }
 
 function filteredLoads() {
-  return state.loads.filter((load) => {
+  return ledgerLoads().filter((load) => {
     const searchable = [
       load.amazonTripId,
       load.amazonLoadId,
@@ -355,19 +386,73 @@ function filteredLoads() {
 
     if (state.filters.search && !searchable.includes(state.filters.search)) return false;
     if (state.filters.driver && displayDriver(load.driverName) !== state.filters.driver) return false;
-    if (state.filters.status && (load.status || "Unknown") !== state.filters.status) return false;
+    if (state.filters.status && displayStatusLabel(load) !== state.filters.status) return false;
     if (state.filters.invoice && (load.invoiceStatus || "Unmatched") !== state.filters.invoice) return false;
     if (state.filters.source === "trips" && !sourceHas(load, "trips")) return false;
     if (state.filters.source === "gmail" && !sourceHas(load, "gmail")) return false;
+    if (state.filters.source === "settlements" && !sourceHas(load, "settlements")) return false;
     if (state.filters.source === "missing" && !(sourceHas(load, "gmail") && !sourceHas(load, "trips") && load.missingFromTrips)) return false;
+    if (state.filters.month && weekRangeForLoad(load).monthKey !== state.filters.month) return false;
     return true;
   });
 }
 
+function ledgerLoads() {
+  return state.loads.filter((load) => hasLedgerDate(load) || sourceHas(load, "gmail")).filter((load) => !isCoveredChildLoad(load));
+}
+
+function hasLedgerDate(load) {
+  return Boolean(load.tripStartDate || load.pickupDate || load.bookedAt || load.emailDate);
+}
+
+function isCoveredChildLoad(load) {
+  if (sourceHas(load, "gmail")) return false;
+
+  const childId = normalizedLoadId(load.amazonTripId || load.amazonLoadId || load.id);
+  if (!childId) return false;
+
+  const parentTourId = normalizedLoadId(load.parentTourId);
+  if (parentTourId && hasLedgerTour(parentTourId)) return true;
+
+  const settlementInferredTourId = normalizedLoadId(load.childTourId);
+  return Boolean(settlementInferredTourId && hasLedgerTour(settlementInferredTourId) && !hasUsableRoute(load));
+}
+
+function hasLedgerTour(tourId) {
+  const normalizedTour = normalizedLoadId(tourId);
+  if (!normalizedTour) return false;
+  return state.loads.some((load) => {
+    if (load === undefined) return false;
+    const id = normalizedLoadId(load.amazonTripId || load.amazonLoadId || load.id);
+    return id === normalizedTour && !load.parentTourId && !load.childTourId;
+  });
+}
+
+function normalizedLoadId(value) {
+  return String(value || "").trim().toUpperCase().replace(/^TRIP_/, "").replace(/^T-/, "");
+}
+
+function normalizeIdList(value) {
+  if (Array.isArray(value)) return [...new Set(value.map((item) => normalizedLoadId(item)).filter(Boolean))];
+  return String(value || "").split(",").map((item) => normalizedLoadId(item)).filter(Boolean);
+}
+
+function hasUsableRoute(load) {
+  const route = displayRoute(load);
+  return isUsableCity(route.origin) && isUsableCity(route.destination);
+}
+
+function isUsableCity(value) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  if (/tractor|trailer|equipment|unknown/i.test(text)) return false;
+  return text.length >= 3;
+}
+
 function renderSummary(loads) {
-  const totalPayout = sum(loads.map((load) => moneyValue(load.payout)));
-  const unpaidPayout = sum(loads.filter((load) => !isInvoicePaid(load)).map((load) => moneyValue(load.payout)));
-  const reviewCount = loads.filter((load) => load.missingFromTrips || load.status === "Needs review" || load.invoiceStatus === "Disputed").length;
+  const totalPayout = sum(loads.map((load) => ledgerPayout(load)));
+  const unpaidPayout = sum(loads.filter((load) => !isInvoicePaid(load)).map((load) => ledgerPayout(load)));
+  const reviewCount = loads.filter((load) => needsReview(load)).length;
   const gmailMissing = loads.filter((load) => sourceHas(load, "gmail") && !sourceHas(load, "trips") && load.missingFromTrips).length;
   elements.totalLoads.textContent = String(loads.length);
   elements.totalPayout.textContent = currency(totalPayout);
@@ -393,6 +478,15 @@ function weekHeaderRow(week) {
   row.className = "week-row";
   const cell = document.createElement("td");
   cell.colSpan = 10;
+  const settlement = settlementSummaryForWeek(week.contextId);
+  const settlementMarkup = settlement.count > 0
+    ? `
+      <span>Amazon ${currency(settlement.mainTotal)}</span>
+      ${settlement.disputeTotal > 0 ? `<span>Disputes ${currency(settlement.disputeTotal)}</span>` : ""}
+      <span class="${settlementDiffClass(week.total, settlement.paidTotal)}">Diff ${currency(settlementDiffValue(week.total, settlement.paidTotal))}</span>
+      <span>${settlement.status}</span>
+    `
+    : `<span>No Amazon payment row</span>`;
   cell.innerHTML = `
     <div class="week-summary">
       <strong>${week.label}</strong>
@@ -400,6 +494,7 @@ function weekHeaderRow(week) {
       <span>Total ${currency(week.total)}</span>
       <span>Unpaid ${currency(week.unpaid)}</span>
       <span>${week.reviewCount} review</span>
+      ${settlementMarkup}
     </div>
   `;
   row.append(cell);
@@ -409,13 +504,16 @@ function weekHeaderRow(week) {
 function loadRow(load) {
     const row = elements.rowTemplate.content.firstElementChild.cloneNode(true);
     row.dataset.id = load.id;
-    setCell(row, "trip", load.amazonTripId || load.amazonLoadId || load.id);
+    setTripLink(row, load);
     setCell(row, "driver", displayDriver(load.driverName));
-    setCell(row, "origin", cleanCity(load.origin));
-    setCell(row, "destination", cleanCity(load.destination));
+    const route = displayRoute(load);
+    setCell(row, "origin", route.origin);
+    setCell(row, "destination", route.destination);
     setCell(row, "start", load.tripStartDate || load.pickupDate || "");
-    setCell(row, "payout", currency(moneyValue(load.payout)));
-    row.querySelector('[data-field="status"]').append(statusBadge(load));
+    setCell(row, "payout", currency(ledgerPayout(load)));
+    const statusCell = row.querySelector('[data-field="status"]');
+    statusCell.append(statusBadge(load));
+    if (hasDispute(load) && !isCancelledLoad(load) && !isDisputePaid(load)) statusCell.append(disputeBadge(load));
     row.querySelector('[data-field="source"]').append(sourceBadge(load));
 
     const invoice = row.querySelector('[data-action="invoice"]');
@@ -451,9 +549,9 @@ function groupLoadsByWeek(loads) {
     };
 
     existing.loads.push(load);
-    existing.total += moneyValue(load.payout);
-    if (!isInvoicePaid(load)) existing.unpaid += moneyValue(load.payout);
-    if (load.missingFromTrips || load.status === "Needs review" || load.invoiceStatus === "Disputed") {
+    existing.total += ledgerPayout(load);
+    if (!isInvoicePaid(load)) existing.unpaid += ledgerPayout(load);
+    if (needsReview(load)) {
       existing.reviewCount += 1;
     }
     weeks.set(week.key, existing);
@@ -463,17 +561,125 @@ function groupLoadsByWeek(loads) {
 }
 
 function weekRangeForLoad(load) {
+  if (load.settlementContextId) {
+    const settlementWeek = weekRangeFromSettlementContext(load.settlementContextId);
+    if (settlementWeek) return settlementWeek;
+  }
+
   const date = loadDate(load.tripStartDate || load.pickupDate || load.bookedAt || load.emailDate);
-  if (!date) return { key: "no-date", label: "No date", sort: 0 };
+  if (!date) return { key: "no-date", label: "No date", sort: 0, contextId: "", monthKey: "", monthLabel: "", monthSort: 0 };
 
   // Amazon Relay pay weeks run Sunday through Saturday.
   const start = new Date(date.getFullYear(), date.getMonth(), date.getDate() - date.getDay());
   const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+  const contextId = amazonWeekContextId(start);
+  const majorityMonth = majorityMonthForWeek(start, end);
   return {
     key: dateKey(start),
     label: `${formatMonthDay(start)} - ${formatMonthDay(end)}`,
-    sort: start.getTime()
+    sort: start.getTime(),
+    contextId,
+    ...majorityMonth
   };
+}
+
+function weekRangeFromSettlementContext(contextId) {
+  const settlement = state.settlements.find((item) => item.contextId === contextId && item.weekStartDate && item.weekEndDate);
+  if (settlement) {
+    const start = loadDate(settlement.weekStartDate);
+    const end = loadDate(settlement.weekEndDate);
+    if (start && end) {
+      return {
+        key: dateKey(start),
+        label: `${formatMonthDay(start)} - ${formatMonthDay(end)}`,
+        sort: start.getTime(),
+        contextId,
+        ...majorityMonthForWeek(start, end)
+      };
+    }
+  }
+
+  const match = String(contextId || "").match(/^(\d{4})#(\d{1,2})$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const week = Number(match[2]);
+  const janFirst = new Date(year, 0, 1, 12);
+  const firstWeekStart = new Date(year, 0, 1 - janFirst.getDay(), 12);
+  const start = new Date(firstWeekStart.getFullYear(), firstWeekStart.getMonth(), firstWeekStart.getDate() + (week - 1) * 7, 12);
+  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6, 12);
+  return {
+    key: dateKey(start),
+    label: `${formatMonthDay(start)} - ${formatMonthDay(end)}`,
+    sort: start.getTime(),
+    contextId,
+    ...majorityMonthForWeek(start, end)
+  };
+}
+
+function majorityMonthForWeek(start, end) {
+  const counts = new Map();
+  const cursor = new Date(start.getFullYear(), start.getMonth(), start.getDate(), 12);
+  const last = new Date(end.getFullYear(), end.getMonth(), end.getDate(), 12);
+
+  while (cursor <= last) {
+    const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
+    const existing = counts.get(key) || {
+      monthKey: key,
+      monthLabel: cursor.toLocaleDateString("en-US", { month: "long", year: "numeric" }),
+      monthSort: new Date(cursor.getFullYear(), cursor.getMonth(), 1).getTime(),
+      count: 0
+    };
+    existing.count += 1;
+    counts.set(key, existing);
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  const majority = [...counts.values()].sort((a, b) => b.count - a.count || b.monthSort - a.monthSort)[0];
+  return {
+    monthKey: majority?.monthKey || "",
+    monthLabel: majority?.monthLabel || "",
+    monthSort: majority?.monthSort || 0
+  };
+}
+
+function amazonWeekContextId(weekStart) {
+  const year = weekStart.getFullYear();
+  const janFirst = new Date(year, 0, 1, 12);
+  const firstWeekStart = new Date(year, 0, 1 - janFirst.getDay(), 12);
+  const dayDiff = Math.round((utcDay(weekStart) - utcDay(firstWeekStart)) / (24 * 60 * 60 * 1000));
+  const week = Math.floor(dayDiff / 7) + 1;
+  return `${year}#${week}`;
+}
+
+function utcDay(date) {
+  return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function settlementSummaryForWeek(contextId) {
+  const settlements = state.settlements.filter((settlement) => settlement.contextId === contextId);
+  const mainSettlements = settlements.filter((settlement) => !settlement.friendlyDisputeId);
+  const disputeSettlements = settlements.filter((settlement) => settlement.friendlyDisputeId);
+  const mainTotal = sum(mainSettlements.map((settlement) => moneyValue(settlement.amount)));
+  const disputeTotal = sum(disputeSettlements.map((settlement) => moneyValue(settlement.amount)));
+  const paidTotal = mainTotal + disputeTotal;
+  const statusRows = settlements;
+  const statuses = statusRows.map((settlement) => settlement.displayStatus || settlement.paymentStatus || "").filter(Boolean);
+  let status = "Unmatched";
+  if (statuses.length > 0) {
+    if (statuses.some((item) => String(item).toLowerCase() === "pending")) status = "Pending";
+    else if (statuses.every((item) => String(item).toLowerCase() === "paid" || String(item).toUpperCase() === "INITIATED")) status = "Paid";
+    else status = uniqueValues(statuses).join(", ");
+  }
+  return { count: settlements.length, mainTotal, disputeTotal, paidTotal, status };
+}
+
+function settlementDiffClass(loadTotal, settlementTotal) {
+  return Math.abs(loadTotal - settlementTotal) < 5 ? "settlement-ok" : "settlement-warn";
+}
+
+function settlementDiffValue(loadTotal, settlementTotal) {
+  const diff = loadTotal - settlementTotal;
+  return Math.abs(diff) < 5 ? 0 : diff;
 }
 
 function dateKey(date) {
@@ -490,14 +696,104 @@ function setCell(row, field, value) {
   row.querySelector(`[data-field="${field}"]`).textContent = value || "";
 }
 
+function setTripLink(row, load) {
+  const cell = row.querySelector('[data-field="trip"]');
+  const tripId = load.amazonTripId || load.amazonLoadId || load.id;
+  const link = document.createElement("a");
+  link.href = relayTripsUrl(load);
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  link.textContent = tripId;
+  link.title = "Open this week in Amazon Relay Trips";
+  cell.replaceChildren(link);
+}
+
+function relayTripsUrl(load) {
+  const week = weekRangeForLoad(load);
+  const weekStart = localDateFromKey(week.key) || loadDate(load.tripStartDate || load.pickupDate || load.bookedAt || load.emailDate);
+  if (!weekStart) return "https://relay.amazon.com/tours/history";
+
+  const start = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate(), 0, 0, 0, 0);
+  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7, 0, 0, 0, -1);
+  const params = new URLSearchParams({
+    hsrtb: "START_DATE",
+    hsrtdrctn: "asc",
+    hstrtdt: start.toISOString(),
+    henddt: end.toISOString()
+  });
+
+  return `https://relay.amazon.com/tours/${relayTripsTab(load)}?${params.toString()}`;
+}
+
+function relayTripsTab(load) {
+  const status = String(load.status || load.currentTripStatus || "").toLowerCase();
+  if (status.includes("upcoming")) return "upcoming";
+  if (status.includes("transit")) return "in-transit";
+  return "history";
+}
+
+function localDateFromKey(value) {
+  const match = String(value || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return null;
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12);
+}
+
 function statusBadge(load) {
   const badge = document.createElement("span");
-  const label = load.missingFromTrips ? "Needs review" : load.status || "Unknown";
+  const label = displayStatusLabel(load);
   badge.className = "badge";
-  if (label === "History") badge.classList.add("ok");
+  if (label === "Cancelled" && hasDispute(load)) {
+    badge.classList.add("bad", "dispute-combo");
+    badge.textContent = isInvoicePaid(load) || load.paidAfterDispute ? "Cancelled + dispute paid" : "Cancelled + dispute";
+    const id = disputeId(load);
+    if (id) badge.title = `Dispute ID: ${id}`;
+    return badge;
+  }
+
+  if (isDisputePaid(load)) {
+    badge.classList.add("dispute");
+    badge.textContent = "Dispute paid";
+    const id = disputeId(load);
+    if (id) badge.title = `Dispute ID: ${id}`;
+    return badge;
+  }
+
+  if (label === "Completed") badge.classList.add("ok");
   if (label === "Needs review" || load.invoiceStatus === "Disputed") badge.classList.add("warn");
   if (label === "Cancelled") badge.classList.add("bad");
+
   badge.textContent = label;
+  return badge;
+}
+
+function displayStatusLabel(load) {
+  if (load.missingFromTrips && !isDisputePaid(load) && !isInvoicePaid(load)) return "Needs review";
+  const status = String(load.status || load.currentTripStatus || "Unknown").trim();
+  if (/^history$/i.test(status)) return "Completed";
+  if (/^in[\s_-]*transit$/i.test(status)) return "In transit";
+  if (/^upcoming$/i.test(status)) return "Upcoming";
+  if (/^cancelled$/i.test(status)) return "Cancelled";
+  return status || "Unknown";
+}
+
+function hasDispute(load) {
+  return Boolean(disputeId(load) || load.paidAfterDispute || load.disputeStatus);
+}
+
+function isDisputePaid(load) {
+  return Boolean(hasDispute(load) && (isInvoicePaid(load) || load.paidAfterDispute));
+}
+
+function disputeId(load) {
+  return String(load.disputeId || load.settlementFriendlyDisputeId || "").trim();
+}
+
+function disputeBadge(load) {
+  const badge = document.createElement("span");
+  const id = disputeId(load);
+  badge.className = "badge dispute";
+  badge.textContent = isInvoicePaid(load) || load.paidAfterDispute ? "Dispute paid" : "Dispute";
+  if (id) badge.title = `Dispute ID: ${id}`;
   return badge;
 }
 
@@ -506,9 +802,18 @@ function sourceBadge(load) {
   const source = load.source || "trips";
   const hasGmail = sourceHas(load, "gmail");
   const hasTrips = sourceHas(load, "trips");
-  badge.className = `badge ${hasGmail && !hasTrips ? "gmail" : "trips"}`;
-  if (hasGmail && hasTrips) {
+  const hasSettlements = sourceHas(load, "settlements");
+  badge.className = `badge ${hasGmail && !hasTrips && !hasSettlements ? "gmail" : "trips"}`;
+  if (hasTrips && hasGmail && hasSettlements) {
+    badge.textContent = "Trips + Gmail + Settlement";
+  } else if (hasTrips && hasGmail) {
     badge.textContent = "Trips + Gmail";
+  } else if (hasSettlements && hasGmail) {
+    badge.textContent = "Gmail + Settlement";
+  } else if (hasSettlements && hasTrips) {
+    badge.textContent = "Trips + Settlement";
+  } else if (hasSettlements) {
+    badge.textContent = "Settlement";
   } else if (hasGmail) {
     badge.textContent = load.missingFromTrips ? "Gmail only" : "Gmail";
   } else {
@@ -525,6 +830,11 @@ function isInvoicePaid(load) {
   return String(load.invoiceStatus || "").toLowerCase() === "paid";
 }
 
+function needsReview(load) {
+  if (isDisputePaid(load) || isInvoicePaid(load)) return false;
+  return Boolean(load.missingFromTrips || load.status === "Needs review" || load.invoiceStatus === "Disputed");
+}
+
 async function updateLoad(id, patch) {
   try {
     await apiPatch(`/loads/${encodeURIComponent(id)}`, patch);
@@ -539,6 +849,42 @@ async function updateLoad(id, patch) {
 
 function cleanPlace(value) {
   return String(value || "").replace(/\b[A-Z0-9]{3,5}\s+/g, "").replace(/\s+/g, " ").trim();
+}
+
+function displayRoute(load) {
+  const fallback = routeFromRawEmail(load.rawEmailText);
+  return {
+    origin: cleanCity(load.origin || fallback.origin),
+    destination: cleanCity(load.destination || fallback.destination)
+  };
+}
+
+function routeFromRawEmail(value) {
+  const text = decodeEmailText(value).replace(/\s+/g, " ").trim();
+  const match = text.match(
+    /\b[A-Z0-9]{3,5}\s+([A-Z][A-Z .'-]+?),\s*(CA|California)\s*(?:>|→|->)\s*[A-Z0-9]{3,5}\s+([A-Z][A-Z .'-]+?),\s*(CA|California)\b/i
+  );
+
+  if (!match) return { origin: "", destination: "" };
+  return {
+    origin: `${match[1]}, ${normalizeStateName(match[2])}`,
+    destination: `${match[3]}, ${normalizeStateName(match[4])}`
+  };
+}
+
+function decodeEmailText(value) {
+  return String(value || "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&#x27;/gi, "'")
+    .replace(/&#39;/gi, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/&gt;/gi, ">")
+    .replace(/&lt;/gi, "<")
+    .replace(/&amp;/gi, "&");
+}
+
+function normalizeStateName(value) {
+  return /^california$/i.test(String(value || "")) ? "CA" : String(value || "").toUpperCase();
 }
 
 function cleanCity(value) {
@@ -582,6 +928,21 @@ function moneyValue(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
+function ledgerPayout(load) {
+  if (isDisputePaid(load) && moneyValue(load.settlementAmount) > 0) return moneyValue(load.settlementAmount);
+  if (isCancelledLoad(load)) return 175;
+
+  if (sourceHas(load, "gmail")) {
+    const gmailPayout = moneyValue(load.gmailPayout ?? load.originalBookedPayout ?? load.bookedPayout);
+    if (gmailPayout > 0) return gmailPayout;
+  }
+  return moneyValue(load.payout);
+}
+
+function isCancelledLoad(load) {
+  return String(load.status || load.currentTripStatus || "").toLowerCase() === "cancelled";
+}
+
 function sum(values) {
   return values.reduce((total, value) => total + value, 0);
 }
@@ -599,6 +960,11 @@ function sortableDate(value) {
 function loadDate(value) {
   const text = String(value || "").trim();
   if (!text) return null;
+
+  const isoDate = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoDate) {
+    return new Date(Number(isoDate[1]), Number(isoDate[2]) - 1, Number(isoDate[3]), 12);
+  }
 
   const monthMatch = text.match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2})\b/i);
   if (monthMatch) {

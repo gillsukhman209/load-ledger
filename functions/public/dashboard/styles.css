@@ -21,6 +21,7 @@ body {
   background: var(--page);
   color: var(--ink);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  overflow-x: hidden;
 }
 
 [hidden] {
@@ -276,6 +277,14 @@ tbody tr:hover {
   font-weight: 700;
 }
 
+.week-summary .settlement-ok {
+  color: var(--green);
+}
+
+.week-summary .settlement-warn {
+  color: var(--amber);
+}
+
 td[data-field="payout"] {
   text-align: left;
   font-variant-numeric: tabular-nums;
@@ -285,6 +294,19 @@ td[data-field="payout"] {
 td[data-field="trip"] {
   color: #075985;
   font-weight: 800;
+}
+
+td[data-field="trip"] a,
+td[data-field="trip"] a:visited {
+  color: inherit;
+  text-decoration: none;
+  cursor: default;
+}
+
+td[data-field="trip"] a:hover {
+  color: inherit;
+  cursor: pointer;
+  text-decoration: none;
 }
 
 .badge {
@@ -314,6 +336,16 @@ td[data-field="trip"] {
   color: var(--red);
 }
 
+.badge.bad.dispute-combo {
+  background: #ffe4e6;
+  color: #be123c;
+}
+
+.badge.dispute {
+  background: #f3e8ff;
+  color: #7e22ce;
+}
+
 .badge.gmail {
   background: #e0f2fe;
   color: #075985;
@@ -322,6 +354,14 @@ td[data-field="trip"] {
 .badge.trips {
   background: #dcfce7;
   color: var(--green);
+}
+
+td[data-field="status"] {
+  white-space: nowrap;
+}
+
+td[data-field="status"] .badge + .badge {
+  margin-left: 6px;
 }
 
 td input[type="text"],
@@ -360,83 +400,229 @@ td input[data-action="notes"] {
 }
 
 @media (max-width: 760px) {
+  button {
+    min-width: 0;
+  }
+
   .topbar {
-    align-items: flex-start;
-    padding: 14px;
+    display: grid;
+    align-items: start;
+    padding: 12px;
+    gap: 10px;
   }
 
   .topbar h1 {
-    font-size: 19px;
+    font-size: 18px;
   }
 
   .topbar-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
+    gap: 8px;
   }
 
   .topbar-actions button {
-    flex: 1 1 calc(50% - 6px);
-    min-width: 128px;
+    width: 100%;
+    min-width: 0;
     padding: 0 10px;
+    font-size: 13px;
+    white-space: normal;
   }
 
   main {
-    padding: 12px;
+    width: 100%;
+    padding: 10px;
   }
 
   .summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
   }
 
   .summary-grid article {
-    padding: 12px;
+    min-width: 0;
+    padding: 12px 10px;
   }
 
   .summary-grid strong {
-    font-size: 20px;
+    font-size: 19px;
+    line-height: 1.1;
   }
 
   .controls,
   .settings-panel,
   .settings-panel {
     grid-template-columns: 1fr;
+    padding: 12px;
   }
 
   .workbench {
     gap: 12px;
   }
 
-  table {
-    min-width: 820px;
+  .table-wrap {
+    overflow: visible;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
   }
 
-  th,
-  td {
-    padding: 8px;
+  table {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    border-collapse: separate;
+    border-spacing: 0;
+    table-layout: auto;
+  }
+
+  thead {
+    display: none;
+  }
+
+  tbody {
+    display: grid;
+    gap: 10px;
+  }
+
+  tbody tr {
+    width: 100%;
+  }
+
+  tbody tr:not(.week-row) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 9px 12px;
+    padding: 12px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    box-shadow: var(--shadow);
+  }
+
+  tbody tr:not(.week-row):hover {
+    background: var(--panel);
+  }
+
+  tbody tr:not(.week-row) td {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+    padding: 0;
+    border: 0;
     font-size: 12px;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
+
+  tbody tr:not(.week-row) td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 10px;
+    font-weight: 800;
+    line-height: 1.1;
+    text-transform: uppercase;
+  }
+
+  tbody tr:not(.week-row) td[data-field="trip"] {
+    grid-column: 1 / 2;
+    font-size: 15px;
+  }
+
+  tbody tr:not(.week-row) td[data-field="driver"] {
+    grid-column: 2 / 3;
+    justify-items: end;
+    text-align: right;
+  }
+
+  tbody tr:not(.week-row) td[data-field="origin"],
+  tbody tr:not(.week-row) td[data-field="destination"] {
+    font-size: 14px;
+  }
+
+  tbody tr:not(.week-row) td[data-field="payout"] {
+    font-size: 16px;
+  }
+
+  tbody tr:not(.week-row) td[data-field="status"],
+  tbody tr:not(.week-row) td[data-field="source"] {
+    align-content: start;
+  }
+
+  tbody tr:not(.week-row) td:nth-last-child(2),
+  tbody tr:not(.week-row) td:last-child {
+    grid-column: 1 / -1;
+  }
+
+  tbody tr:not(.week-row) td:nth-last-child(2) select,
+  tbody tr:not(.week-row) td:last-child input,
+  tbody tr:not(.week-row) td:last-child button {
+    width: 100%;
+  }
+
+  td[data-field="trip"] a,
+  td[data-field="driver"],
+  td[data-field="origin"],
+  td[data-field="destination"] {
+    overflow-wrap: anywhere;
   }
 
   .week-summary {
     align-items: flex-start;
-    flex-direction: column;
-    gap: 4px;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 5px 10px;
+    padding: 12px;
+    background: #f6f9fc;
+    border: 1px solid #cfd8e3;
+    border-radius: 8px;
+  }
+
+  .week-summary strong {
+    grid-column: 1 / -1;
+    font-size: 17px;
+  }
+
+  .week-row td {
+    display: block;
+    border: 0;
+    background: transparent;
   }
 
   td input[type="text"],
   td select {
-    min-width: 110px;
+    min-width: 0;
   }
 }
 
 @media (max-width: 430px) {
-  .topbar {
-    display: grid;
-  }
-
-  .topbar-actions button {
-    flex-basis: 100%;
-  }
-
   .summary-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .summary-grid span {
+    font-size: 11px;
+  }
+
+  .summary-grid strong {
+    font-size: 17px;
+  }
+
+  .section-toggle {
+    width: 100%;
+  }
+
+  tbody tr:not(.week-row) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  tbody tr:not(.week-row) td[data-field="trip"],
+  tbody tr:not(.week-row) td[data-field="driver"] {
+    grid-column: 1 / -1;
+    justify-items: start;
+    text-align: left;
   }
 }

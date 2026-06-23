@@ -21,7 +21,13 @@
 
   const parseJsonSafely = (text) => {
     if (!text || typeof text !== "string") return null;
-    if (!text.includes("T-") && !text.includes('"entities"')) return null;
+    const isUsefulRelayPayload =
+      text.includes("T-") ||
+      text.includes('"entities"') ||
+      text.includes('"settlementList"') ||
+      text.includes('"settlementsMetadata"') ||
+      text.includes('"paymentStatus"');
+    if (!isUsefulRelayPayload) return null;
     try {
       return JSON.parse(text);
     } catch (_error) {

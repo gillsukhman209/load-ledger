@@ -1,5 +1,5 @@
 const DEFAULT_SETTINGS = {
-  backendBaseUrl: "",
+  backendBaseUrl: "https://us-central1-relayloadtracker.cloudfunctions.net/api",
   apiKey: "",
   autoSync: true,
   syncIntervalMinutes: 15,

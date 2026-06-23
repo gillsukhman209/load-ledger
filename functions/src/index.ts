@@ -1,6 +1,7 @@
 import * as admin from "firebase-admin";
 import { FieldValue, getFirestore } from "firebase-admin/firestore";
 import { onRequest } from "firebase-functions/v2/https";
+import { onSchedule } from "firebase-functions/v2/scheduler";
 import cors from "cors";
 import express from "express";
 import * as fs from "fs";
@@ -19,6 +20,7 @@ app.use("/dashboard", express.static(path.join(__dirname, "../public/dashboard")
 
 type RelayTrip = {
   tripId?: string;
+  parentTourId?: string;
   driver?: string;
   status?: string;
   pickup?: string;
@@ -43,6 +45,7 @@ type GmailLoad = {
   origin?: string;
   destination?: string;
   payout?: number | null;
+  gmailPayout?: number | null;
   pickupDate?: string;
   bookedAt?: string;
   driverName?: string;
@@ -56,6 +59,34 @@ type GmailLoad = {
   updatedAt: FirebaseFirestore.FieldValue;
 };
 
+type RelaySettlement = {
+  settlementId?: string;
+  carrierId?: string;
+  paymentAccountType?: string;
+  invoiceStatus?: string;
+  paymentStatus?: string;
+  displayStatus?: string;
+  amount?: number | null;
+  amountExcludingTax?: number | null;
+  contextId?: string;
+  contextYear?: number | string;
+  contextWeek?: number | string;
+  weekStartDate?: string;
+  weekEndDate?: string;
+  billingCycle?: string;
+  workType?: string;
+  settlementNumber?: string;
+  invoiceBillingType?: string;
+  friendlyDisputeId?: string;
+  vrIds?: string[];
+  tourIds?: string[];
+  invoiceDate?: string;
+  expectedPaymentDate?: string;
+  paymentInitiationDate?: string;
+  creditNote?: boolean;
+  sourceUrl?: string;
+};
+
 type GmailMessageDetails = {
   id: string;
   subject: string;
@@ -64,12 +95,39 @@ type GmailMessageDetails = {
   text: string;
 };
 
+type GmailSyncOptions = {
+  maxResults?: number;
+  lookbackDays?: number;
+  trigger?: "manual" | "scheduled";
+};
+
+type GmailSyncResult = {
+  ok: true;
+  processed: number;
+  upserted: number;
+  skipped: number;
+  noAccounts?: boolean;
+  message?: string;
+  errors: string[];
+  accounts: Array<{ email: string; processed: number; upserted: number }>;
+};
+
 function now() {
   return FieldValue.serverTimestamp();
 }
 
 function getEnv(name: string) {
   return process.env[name] || "";
+}
+
+function envNumber(name: string, fallback: number, min: number, max: number) {
+  return clampNumber(getEnv(name), min, max, fallback);
+}
+
+function clampNumber(value: unknown, min: number, max: number, fallback: number) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(Math.max(Math.round(number), min), max);
 }
 
 function requireApiKey(req: express.Request, res: express.Response, next: express.NextFunction) {
@@ -221,22 +279,34 @@ app.get("/gmail/accounts", requireApiKey, async (_req, res) => {
 });
 
 app.post("/gmail/sync", requireApiKey, async (req, res) => {
+  const result = await runGmailSync({
+    maxResults: Number(req.body?.maxResults || req.query.maxResults || 1000),
+    lookbackDays: Number(req.body?.lookbackDays || req.query.lookbackDays || 365),
+    trigger: "manual"
+  });
+  res.json(result);
+});
+
+async function runGmailSync(options: GmailSyncOptions = {}): Promise<GmailSyncResult> {
   await restoreLocalGmailAccountsIfEmpty();
   const accounts = await db.collection("gmailAccounts").get();
   if (accounts.empty) {
-    res.json({
+    const result: GmailSyncResult = {
       ok: true,
       processed: 0,
       upserted: 0,
       skipped: 0,
       noAccounts: true,
-      message: "No Gmail account is connected in this Firebase emulator database."
-    });
-    return;
+      message: "No Gmail account is connected.",
+      errors: [],
+      accounts: []
+    };
+    await recordGmailSyncRun(options, result);
+    return result;
   }
 
-  const maxResults = Math.min(Number(req.body?.maxResults || req.query.maxResults || 1000), 5000);
-  const lookbackDays = Math.min(Number(req.body?.lookbackDays || req.query.lookbackDays || 365), 3650);
+  const maxResults = clampNumber(options.maxResults, 1, 5000, 1000);
+  const lookbackDays = clampNumber(options.lookbackDays, 1, 3650, 365);
   let processed = 0;
   let upserted = 0;
   let skipped = 0;
@@ -315,8 +385,25 @@ app.post("/gmail/sync", requireApiKey, async (req, res) => {
     });
   }
 
-  res.json({ ok: true, processed, upserted, skipped, errors: errors.slice(0, 10), accounts: accountSummaries });
-});
+  const result: GmailSyncResult = { ok: true, processed, upserted, skipped, errors: errors.slice(0, 10), accounts: accountSummaries };
+  await recordGmailSyncRun(options, result);
+  return result;
+}
+
+async function recordGmailSyncRun(options: GmailSyncOptions, result: GmailSyncResult) {
+  await db.collection("gmailSyncRuns").add({
+    trigger: options.trigger || "manual",
+    lookbackDays: clampNumber(options.lookbackDays, 1, 3650, 365),
+    maxResults: clampNumber(options.maxResults, 1, 5000, 1000),
+    processed: result.processed,
+    upserted: result.upserted,
+    skipped: result.skipped,
+    noAccounts: Boolean(result.noAccounts),
+    errors: result.errors.slice(0, 10),
+    accounts: result.accounts,
+    createdAt: now()
+  });
+}
 
 app.post("/gmail/clear-imports", requireApiKey, async (_req, res) => {
   const snapshot = await db.collection("loads").where("source", "==", "gmail").get();
@@ -336,7 +423,7 @@ app.post("/gmail/clear-imports", requireApiKey, async (_req, res) => {
 });
 
 app.get("/loads", requireApiKey, async (req, res) => {
-  const limit = Math.min(Number(req.query.limit || 100), 500);
+  const limit = Math.min(Number(req.query.limit || 100), 5000);
   const snapshot = await db
     .collection("loads")
     .orderBy("updatedAt", "desc")
@@ -364,7 +451,11 @@ app.patch("/loads/:id", requireApiKey, async (req, res) => {
     "invoiceStatus",
     "invoiceNumber",
     "notes",
-    "settlementWeek"
+    "settlementWeek",
+    "origin",
+    "destination",
+    "pickupDate",
+    "tripStartDate"
   ];
   const update: Record<string, unknown> = {};
 
@@ -398,6 +489,114 @@ app.get("/tripScans", requireApiKey, async (req, res) => {
   });
 });
 
+app.get("/settlements", requireApiKey, async (req, res) => {
+  const limit = Math.min(Number(req.query.limit || 300), 1000);
+  const snapshot = await db
+    .collection("settlements")
+    .orderBy("updatedAt", "desc")
+    .limit(limit)
+    .get();
+
+  res.json({
+    ok: true,
+    settlements: snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }))
+  });
+});
+
+app.post("/payments/sync", requireApiKey, async (req, res) => {
+  const settlements = Array.isArray(req.body.settlements) ? (req.body.settlements as RelaySettlement[]) : [];
+  const scanRef = await db.collection("paymentScans").add({
+    source: req.body.source || "extension",
+    reason: req.body.reason || "",
+    pageUrl: req.body.pageUrl || "",
+    syncedAt: req.body.syncedAt || new Date().toISOString(),
+    settlementCount: settlements.length,
+    settlementIds: settlements.map((settlement) => settlement.settlementId).filter(Boolean),
+    createdAt: now()
+  });
+
+  let upserted = 0;
+  let matchedLoads = 0;
+  let unmatchedIds = 0;
+
+  for (const settlement of settlements) {
+    if (!settlement.settlementId) continue;
+    const normalized = normalizeSettlement(settlement);
+    const relatedIds = [...new Set([...(normalized.vrIds || []), ...(normalized.tourIds || [])])];
+    const matchedLoadIds: string[] = [];
+    const unmatchedSettlementIds: string[] = [];
+    const settlementRef = db.collection("settlements").doc(`settlement_${normalized.settlementId}`);
+    const existingSettlement = await settlementRef.get();
+
+    await settlementRef.set(
+      {
+        ...normalized,
+        relatedIds,
+        updatedAt: now(),
+        ...(existingSettlement.exists ? {} : { createdAt: now() })
+      },
+      { merge: true }
+    );
+    upserted += 1;
+
+    for (const relatedId of relatedIds) {
+      const match = await findExistingLoadByIds(relatedId, relatedId);
+      if (!match) {
+        unmatchedSettlementIds.push(relatedId);
+        unmatchedIds += 1;
+        continue;
+      }
+
+      const disputeId = normalized.friendlyDisputeId || match.data.disputeId || match.data.settlementFriendlyDisputeId || "";
+      const settlementIsPaid = normalized.paymentStatus === "INITIATED" || normalized.displayStatus === "Paid";
+
+      await match.ref.set(
+        {
+          source: mergeSource(match.data.source, "settlements"),
+          settlementId: normalized.settlementId,
+          settlementContextId: normalized.contextId || "",
+          settlementAmount: normalized.amount ?? null,
+          settlementPaymentStatus: normalized.paymentStatus || "",
+          settlementDisplayStatus: normalized.displayStatus || "",
+          settlementFriendlyDisputeId: normalized.friendlyDisputeId || match.data.settlementFriendlyDisputeId || "",
+          disputeId,
+          disputeStatus: normalized.friendlyDisputeId
+            ? settlementIsPaid ? "Paid after dispute" : "Disputed"
+            : match.data.disputeStatus || "",
+          paidAfterDispute: Boolean(match.data.paidAfterDispute || (normalized.friendlyDisputeId && settlementIsPaid)),
+          settlementInvoiceDate: normalized.invoiceDate || "",
+          settlementExpectedPaymentDate: normalized.expectedPaymentDate || "",
+          settlementPaymentInitiationDate: normalized.paymentInitiationDate || "",
+          invoiceStatus: invoiceStatusForSettlement(normalized, match.data.invoiceStatus),
+          missingFromTrips: sourceHas(match.data.source, "trips") || Boolean(match.data.lastSeenInTripsAt) ? false : match.data.missingFromTrips,
+          updatedAt: now()
+        },
+        { merge: true }
+      );
+      matchedLoadIds.push(match.ref.id);
+      matchedLoads += 1;
+    }
+
+    await settlementRef.set(
+      {
+        matchedLoadIds,
+        unmatchedSettlementIds,
+        updatedAt: now()
+      },
+      { merge: true }
+    );
+  }
+
+  res.json({
+    ok: true,
+    scanId: scanRef.id,
+    received: settlements.length,
+    upserted,
+    matchedLoads,
+    unmatchedIds
+  });
+});
+
 app.post("/trips/sync", requireApiKey, async (req, res) => {
   const trips = Array.isArray(req.body.trips) ? (req.body.trips as RelayTrip[]) : [];
   const scanRef = await db.collection("tripScans").add({
@@ -421,12 +620,14 @@ app.post("/trips/sync", requireApiKey, async (req, res) => {
         {
           source: mergeSource(match.data.source, "trips"),
           amazonTripId: trip.tripId,
+          parentTourId: trip.parentTourId || match.data.parentTourId || "",
           driverName: normalizeDriverName(trip.driver || match.data.driverName || ""),
           status: trip.status || match.data.status || "seen_in_trips",
           currentTripStatus: trip.status || "",
           origin: trip.pickup || match.data.origin || "",
           destination: trip.dropoff || match.data.destination || "",
           payout: parseMoney(trip.payout) ?? match.data.payout ?? null,
+          gmailPayout: match.data.gmailPayout ?? match.data.originalBookedPayout ?? null,
           tripStartDate: trip.startTime || "",
           tripEndDate: trip.endTime || "",
           equipment: trip.equipment || "",
@@ -446,6 +647,7 @@ app.post("/trips/sync", requireApiKey, async (req, res) => {
         {
           source: "trips",
           amazonTripId: trip.tripId,
+          parentTourId: trip.parentTourId || "",
           driverName: normalizeDriverName(trip.driver || ""),
           status: trip.status || "seen_in_trips",
           origin: trip.pickup || "",
@@ -531,16 +733,18 @@ function tripIdVariants(value: string) {
   return [...new Set([id, withoutPrefix, `T-${withoutPrefix}`])];
 }
 
-function sourceHas(source: unknown, value: "gmail" | "trips") {
+function sourceHas(source: unknown, value: string) {
   return String(source || "").split("+").includes(value);
 }
 
-function mergeSource(source: unknown, value: "gmail" | "trips") {
+function mergeSource(source: unknown, value: string) {
   const parts = new Set(String(source || "").split("+").filter(Boolean));
   parts.add(value);
-  if (parts.has("gmail") && parts.has("trips")) return "gmail+trips";
-  if (parts.has("trips")) return "trips";
-  return "gmail";
+  const ordered = ["trips", "gmail", "settlements"].filter((part) => parts.has(part));
+  for (const part of parts) {
+    if (!ordered.includes(part)) ordered.push(part);
+  }
+  return ordered.join("+") || value;
 }
 
 async function upsertGmailLoad(load: GmailLoad) {
@@ -562,6 +766,8 @@ async function upsertGmailLoad(load: GmailLoad) {
     origin: hasTripsData ? existingData.origin || load.origin || "" : load.origin || existingData.origin || "",
     destination: hasTripsData ? existingData.destination || load.destination || "" : load.destination || existingData.destination || "",
     payout: existingData.payout ?? load.payout ?? null,
+    gmailPayout: existingData.gmailPayout ?? existingData.originalBookedPayout ?? load.payout ?? null,
+    originalBookedPayout: existingData.originalBookedPayout ?? existingData.gmailPayout ?? load.payout ?? null,
     pickupDate: load.pickupDate || existingData.pickupDate || "",
     bookedAt: load.bookedAt || existingData.bookedAt || "",
     driverName: normalizeDriverName(existingData.driverName || load.driverName || ""),
@@ -609,6 +815,7 @@ function parseRelayBookingEmail(message: GmailMessageDetails, gmailAccount: stri
     origin: route.origin,
     destination: route.destination,
     payout: payout ?? null,
+    gmailPayout: payout ?? null,
     pickupDate,
     bookedAt: message.date || "",
     driverName: "",
@@ -669,7 +876,12 @@ function normalizeDriverName(value: unknown) {
 
 function normalizeEmailText(value: string) {
   return String(value)
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&#x27;/gi, "'")
+    .replace(/&#39;/gi, "'")
+    .replace(/&quot;/gi, '"')
     .replace(/&gt;/gi, ">")
+    .replace(/&lt;/gi, "<")
     .replace(/&amp;/gi, "&")
     .replace(/\u00a0/g, " ")
     .replace(/\r/g, "\n")
@@ -834,6 +1046,97 @@ function normalizeState(value: string) {
   return /^california$/i.test(value) ? "CA" : value.toUpperCase();
 }
 
+function normalizeSettlement(settlement: RelaySettlement) {
+  const paymentStatus = String(settlement.paymentStatus || "").trim().toUpperCase();
+  const displayStatus =
+    String(settlement.displayStatus || "").trim() ||
+    (paymentStatus === "INITIATED" ? "Paid" : paymentStatus === "PENDING" ? "Pending" : titleCasePlace(paymentStatus.toLowerCase()));
+  const context = normalizeAmazonWeekContext(settlement.contextId || "", settlement.weekStartDate || "", settlement.weekEndDate || "");
+  return {
+    settlementId: String(settlement.settlementId || "").trim(),
+    carrierId: settlement.carrierId || "",
+    paymentAccountType: settlement.paymentAccountType || "",
+    invoiceStatus: settlement.invoiceStatus || "",
+    paymentStatus,
+    displayStatus,
+    amount: parseMoney(settlement.amount),
+    amountExcludingTax: parseMoney(settlement.amountExcludingTax),
+    contextId: settlement.contextId || context.contextId || "",
+    contextYear: context.contextYear,
+    contextWeek: context.contextWeek,
+    weekStartDate: context.weekStartDate,
+    weekEndDate: context.weekEndDate,
+    billingCycle: settlement.billingCycle || "",
+    workType: settlement.workType || "",
+    settlementNumber: settlement.settlementNumber || "",
+    invoiceBillingType: settlement.invoiceBillingType || "",
+    friendlyDisputeId: String(settlement.friendlyDisputeId || "").includes("TFP_NULL") ? "" : settlement.friendlyDisputeId || "",
+    vrIds: normalizeIdList(settlement.vrIds),
+    tourIds: normalizeIdList(settlement.tourIds),
+    invoiceDate: settlement.invoiceDate || "",
+    expectedPaymentDate: settlement.expectedPaymentDate || "",
+    paymentInitiationDate: settlement.paymentInitiationDate || "",
+    creditNote: Boolean(settlement.creditNote),
+    sourceUrl: settlement.sourceUrl || ""
+  };
+}
+
+function invoiceStatusForSettlement(settlement: ReturnType<typeof normalizeSettlement>, existingStatus: unknown) {
+  const existing = String(existingStatus || "");
+  if (existing === "Disputed") return existing;
+  if (settlement.paymentStatus === "INITIATED" || settlement.displayStatus === "Paid") return "Paid";
+  if (settlement.paymentStatus === "PENDING" || settlement.displayStatus === "Pending") return "Pending";
+  return existing || "Matched";
+}
+
+function normalizeIdList(value: unknown) {
+  if (Array.isArray(value)) {
+    return [...new Set(value.map((item) => normalizeRelayId(item)).filter(Boolean))];
+  }
+
+  return [...new Set(String(value || "")
+    .split(",")
+    .map((item) => normalizeRelayId(item))
+    .filter(Boolean))];
+}
+
+function normalizeRelayId(value: unknown) {
+  return String(value || "").trim().toUpperCase();
+}
+
+function normalizeAmazonWeekContext(contextId: string, providedStart: string, providedEnd: string) {
+  const match = String(contextId || "").match(/^(\d{4})#(\d{1,2})$/);
+  if (!match) {
+    return {
+      contextId: "",
+      contextYear: "",
+      contextWeek: "",
+      weekStartDate: providedStart || "",
+      weekEndDate: providedEnd || ""
+    };
+  }
+
+  const contextYear = Number(match[1]);
+  const contextWeek = Number(match[2]);
+  const janFirst = new Date(contextYear, 0, 1, 12);
+  const firstWeekStart = new Date(contextYear, 0, 1 - janFirst.getDay(), 12);
+  const weekStart = new Date(firstWeekStart.getFullYear(), firstWeekStart.getMonth(), firstWeekStart.getDate() + (contextWeek - 1) * 7, 12);
+  const weekEnd = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + 6, 12);
+  return {
+    contextId,
+    contextYear,
+    contextWeek,
+    weekStartDate: providedStart || isoDateKey(weekStart),
+    weekEndDate: providedEnd || isoDateKey(weekEnd)
+  };
+}
+
+function isoDateKey(date: Date) {
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
 function titleCasePlace(value: string) {
   return String(value)
     .toLowerCase()
@@ -846,3 +1149,20 @@ function normalizePlace(value: string) {
 }
 
 export const api = onRequest({ timeoutSeconds: 300 }, app);
+
+export const dailyGmailSync = onSchedule(
+  {
+    schedule: "0 6 * * *",
+    timeZone: "America/Los_Angeles",
+    timeoutSeconds: 540,
+    memory: "512MiB"
+  },
+  async () => {
+    const result = await runGmailSync({
+      maxResults: envNumber("DAILY_GMAIL_MAX_RESULTS", 1000, 50, 5000),
+      lookbackDays: envNumber("DAILY_GMAIL_LOOKBACK_DAYS", 30, 1, 3650),
+      trigger: "scheduled"
+    });
+    console.log("Daily Gmail sync complete", result);
+  }
+);

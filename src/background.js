@@ -1,8 +1,9 @@
 const LOG_PREFIX = "[Relay Trips Ledger worker]";
+const DEFAULT_BACKEND_BASE_URL = "https://us-central1-relayloadtracker.cloudfunctions.net/api";
 
 chrome.runtime.onInstalled.addListener(async () => {
   const defaults = {
-    backendBaseUrl: "",
+    backendBaseUrl: DEFAULT_BACKEND_BASE_URL,
     apiKey: "",
     autoSync: true,
     syncIntervalMinutes: 15,
@@ -30,21 +31,23 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 });
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type !== "RELAY_LEDGER_POST_SYNC") return false;
+  if (message?.type !== "RELAY_LEDGER_POST_SYNC" && message?.type !== "RELAY_LEDGER_POST_PAYMENTS_SYNC") return false;
 
-  postSync(message.backendBaseUrl, message.apiKey, message.payload)
+  const path = message.type === "RELAY_LEDGER_POST_PAYMENTS_SYNC" ? "/payments/sync" : "/trips/sync";
+  postSync(message.backendBaseUrl, message.apiKey, message.payload, path)
     .then((result) => sendResponse(result))
     .catch((error) => sendResponse({ ok: false, error: String(error.message || error) }));
 
   return true;
 });
 
-async function postSync(backendBaseUrl, apiKey, payload) {
+async function postSync(backendBaseUrl, apiKey, payload, path) {
   if (!backendBaseUrl) return { ok: false, error: "Missing Firebase backend URL" };
-  const syncUrl = `${backendBaseUrl.replace(/\/+$/, "")}/trips/sync`;
+  const syncUrl = `${backendBaseUrl.replace(/\/+$/, "")}${path}`;
 
   console.info(`${LOG_PREFIX} posting sync payload`, {
     tripCount: Array.isArray(payload?.trips) ? payload.trips.length : 0,
+    settlementCount: Array.isArray(payload?.settlements) ? payload.settlements.length : 0,
     reason: payload?.reason,
     syncUrl
   });

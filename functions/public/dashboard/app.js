@@ -362,9 +362,9 @@ function filteredLoads() {
     if (state.filters.paid === "paid" && !load.paid) return false;
     if (state.filters.paid === "unpaid" && load.paid) return false;
     if (state.filters.invoice && (load.invoiceStatus || "Unmatched") !== state.filters.invoice) return false;
-    if (state.filters.source === "trips" && load.source !== "trips") return false;
-    if (state.filters.source === "gmail" && load.source !== "gmail") return false;
-    if (state.filters.source === "missing" && !(load.source === "gmail" && load.missingFromTrips)) return false;
+    if (state.filters.source === "trips" && !sourceHas(load, "trips")) return false;
+    if (state.filters.source === "gmail" && !sourceHas(load, "gmail")) return false;
+    if (state.filters.source === "missing" && !(sourceHas(load, "gmail") && !sourceHas(load, "trips") && load.missingFromTrips)) return false;
     return true;
   });
 }
@@ -373,7 +373,7 @@ function renderSummary(loads) {
   const totalPayout = sum(loads.map((load) => moneyValue(load.payout)));
   const unpaidPayout = sum(loads.filter((load) => !load.paid).map((load) => moneyValue(load.payout)));
   const reviewCount = loads.filter((load) => load.missingFromTrips || load.status === "Needs review" || load.invoiceStatus === "Disputed").length;
-  const gmailMissing = loads.filter((load) => load.source === "gmail" && load.missingFromTrips).length;
+  const gmailMissing = loads.filter((load) => sourceHas(load, "gmail") && !sourceHas(load, "trips") && load.missingFromTrips).length;
   elements.totalLoads.textContent = String(loads.length);
   elements.totalPayout.textContent = currency(totalPayout);
   elements.unpaidPayout.textContent = currency(unpaidPayout);
@@ -495,9 +495,21 @@ function statusBadge(load) {
 function sourceBadge(load) {
   const badge = document.createElement("span");
   const source = load.source || "trips";
-  badge.className = `badge ${source === "gmail" ? "gmail" : "trips"}`;
-  badge.textContent = source === "gmail" ? (load.missingFromTrips ? "Gmail only" : "Gmail") : "Trips";
+  const hasGmail = sourceHas(load, "gmail");
+  const hasTrips = sourceHas(load, "trips");
+  badge.className = `badge ${hasGmail && !hasTrips ? "gmail" : "trips"}`;
+  if (hasGmail && hasTrips) {
+    badge.textContent = "Trips + Gmail";
+  } else if (hasGmail) {
+    badge.textContent = load.missingFromTrips ? "Gmail only" : "Gmail";
+  } else {
+    badge.textContent = "Trips";
+  }
   return badge;
+}
+
+function sourceHas(load, value) {
+  return String(load.source || "trips").split("+").includes(value);
 }
 
 async function updateLoad(id, patch) {

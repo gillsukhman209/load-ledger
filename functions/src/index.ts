@@ -418,6 +418,7 @@ app.post("/trips/sync", requireApiKey, async (req, res) => {
     if (match) {
       await match.ref.set(
         {
+          source: mergeSource(match.data.source, "trips"),
           amazonTripId: trip.tripId,
           driverName: trip.driver || match.data.driverName || "",
           status: trip.status || match.data.status || "seen_in_trips",
@@ -481,17 +482,8 @@ app.post("/trips/sync", requireApiKey, async (req, res) => {
 
 async function findMatchingLoad(trip: RelayTrip) {
   const tripId = trip.tripId || "";
-  const byTrip = await db.collection("loads").where("amazonTripId", "==", tripId).limit(1).get();
-  if (!byTrip.empty) {
-    const doc = byTrip.docs[0];
-    return { ref: doc.ref, data: doc.data() };
-  }
-
-  const byLoad = await db.collection("loads").where("amazonLoadId", "==", tripId).limit(1).get();
-  if (!byLoad.empty) {
-    const doc = byLoad.docs[0];
-    return { ref: doc.ref, data: doc.data() };
-  }
+  const existing = await findExistingLoadByIds(tripId, tripId);
+  if (existing) return existing;
 
   const payout = parseMoney(trip.payout);
   if (payout == null || !trip.pickup || !trip.dropoff) return null;
@@ -511,6 +503,40 @@ async function findMatchingLoad(trip: RelayTrip) {
   });
 
   return doc ? { ref: doc.ref, data: doc.data() } : null;
+}
+
+async function findExistingLoadByIds(tripId: string, loadId: string) {
+  const normalizedTripId = String(tripId || "").trim();
+  if (normalizedTripId) {
+    const byTrip = await db.collection("loads").where("amazonTripId", "==", normalizedTripId).limit(1).get();
+    if (!byTrip.empty) {
+      const doc = byTrip.docs[0];
+      return { ref: doc.ref, data: doc.data() };
+    }
+  }
+
+  const normalizedLoadId = String(loadId || "").trim();
+  if (normalizedLoadId) {
+    const byLoad = await db.collection("loads").where("amazonLoadId", "==", normalizedLoadId).limit(1).get();
+    if (!byLoad.empty) {
+      const doc = byLoad.docs[0];
+      return { ref: doc.ref, data: doc.data() };
+    }
+  }
+
+  return null;
+}
+
+function sourceHas(source: unknown, value: "gmail" | "trips") {
+  return String(source || "").split("+").includes(value);
+}
+
+function mergeSource(source: unknown, value: "gmail" | "trips") {
+  const parts = new Set(String(source || "").split("+").filter(Boolean));
+  parts.add(value);
+  if (parts.has("gmail") && parts.has("trips")) return "gmail+trips";
+  if (parts.has("trips")) return "trips";
+  return "gmail";
 }
 
 async function markMissingFromTrips(seenTripIds: string[]) {
@@ -539,8 +565,38 @@ async function markMissingFromTrips(seenTripIds: string[]) {
 }
 
 async function upsertGmailLoad(load: GmailLoad) {
+  const existing = await findExistingLoadByIds(load.amazonTripId || "", load.amazonLoadId || "");
+  const existingData = existing?.data || {};
+  const hasTripsData = sourceHas(existingData.source, "trips") || Boolean(existingData.lastSeenInTripsAt);
   const docId = load.amazonTripId || load.amazonLoadId || load.emailId;
-  await db.collection("loads").doc(docId).set(load, { merge: true });
+  const ref = existing?.ref || db.collection("loads").doc(docId);
+  const update: Record<string, unknown> = {
+    source: mergeSource(existingData.source, "gmail"),
+    emailId: load.emailId,
+    gmailAccount: load.gmailAccount || existingData.gmailAccount || "",
+    emailSubject: load.emailSubject || "",
+    emailFrom: load.emailFrom || "",
+    emailDate: load.emailDate || "",
+    amazonTripId: load.amazonTripId || existingData.amazonTripId || "",
+    amazonLoadId: load.amazonLoadId || existingData.amazonLoadId || "",
+    shortCode: load.shortCode || existingData.shortCode || "",
+    origin: hasTripsData ? existingData.origin || load.origin || "" : load.origin || existingData.origin || "",
+    destination: hasTripsData ? existingData.destination || load.destination || "" : load.destination || existingData.destination || "",
+    payout: existingData.payout ?? load.payout ?? null,
+    pickupDate: load.pickupDate || existingData.pickupDate || "",
+    bookedAt: load.bookedAt || existingData.bookedAt || "",
+    driverName: existingData.driverName || load.driverName || "",
+    status: hasTripsData ? existingData.status || "seen_in_trips" : existingData.status || load.status,
+    invoiceStatus: existingData.invoiceStatus || load.invoiceStatus || "Unmatched",
+    paid: Boolean(existingData.paid || load.paid),
+    notes: existingData.notes || load.notes || "",
+    missingFromTrips: hasTripsData ? false : true,
+    rawEmailText: load.rawEmailText || "",
+    updatedAt: now()
+  };
+
+  if (!existing) update.createdAt = now();
+  await ref.set(update, { merge: true });
 }
 
 function parseRelayBookingEmail(message: GmailMessageDetails, gmailAccount: string): GmailLoad | null {

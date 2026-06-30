@@ -9,8 +9,8 @@
   <body>
     <header class="topbar">
       <div>
-        <h1>Relay Load Ledger</h1>
-        <p id="connectionStatus">Connecting to local Firebase backend...</p>
+        <h1>Loads Overview</h1>
+        <p id="connectionStatus">Track and manage all your relay loads in one place.</p>
       </div>
       <div class="topbar-actions">
         <button id="connectGmailButton" type="button">Connect Gmail</button>
@@ -21,7 +21,7 @@
       </div>
     </header>
 
-    <main>
+    <main id="overview">
       <section class="settings-panel" id="settingsPanel" hidden>
         <label>
           Backend URL
@@ -43,105 +43,149 @@
       </section>
 
       <section class="summary-grid" aria-label="Ledger totals">
-        <article>
-          <span>Total loads</span>
-          <strong id="totalLoads">0</strong>
+        <article class="metric-card metric-loads">
+          <div class="metric-icon">L</div>
+          <div>
+            <span>Total loads</span>
+            <strong id="totalLoads">0</strong>
+            <small>Current ledger</small>
+          </div>
         </article>
-        <article>
-          <span>Total payout</span>
-          <strong id="totalPayout">$0.00</strong>
+        <article class="metric-card metric-money">
+          <div class="metric-icon">P</div>
+          <div>
+            <span>Total payout</span>
+            <strong id="totalPayout">$0.00</strong>
+            <small>Booked value</small>
+          </div>
         </article>
-        <article>
-          <span>Unpaid payout</span>
-          <strong id="unpaidPayout">$0.00</strong>
+        <article class="metric-card metric-unpaid">
+          <div class="metric-icon">U</div>
+          <div>
+            <span>Unpaid payout</span>
+            <strong id="unpaidPayout">$0.00</strong>
+            <small>Needs payment match</small>
+          </div>
         </article>
-        <article>
-          <span>Needs review</span>
-          <strong id="needsReview">0</strong>
+        <article class="metric-card metric-review">
+          <div class="metric-icon">R</div>
+          <div>
+            <span>Needs review</span>
+            <strong id="needsReview">0</strong>
+            <small>Manual or missing</small>
+          </div>
         </article>
-        <article>
-          <span>Gmail missing from Trips</span>
-          <strong id="gmailMissing">0</strong>
+        <article class="metric-card metric-missing">
+          <div class="metric-icon">G</div>
+          <div>
+            <span>Gmail missing</span>
+            <strong id="gmailMissing">0</strong>
+            <small>Email only loads</small>
+          </div>
         </article>
       </section>
 
-      <section class="filter-shell" aria-label="Filters">
-        <button id="filtersButton" class="section-toggle" type="button" aria-expanded="false" aria-controls="filtersPanel">Show filters</button>
-        <div class="controls" id="filtersPanel" hidden>
-          <label>
-            Search
-            <input id="searchInput" type="search" placeholder="Trip, driver, city, status">
-          </label>
-          <label>
-            Driver
-            <select id="driverFilter">
-              <option value="">All drivers</option>
-            </select>
-          </label>
-          <label>
-            Status
-            <select id="statusFilter">
-              <option value="">All statuses</option>
-            </select>
-          </label>
-          <label>
-            Invoice
-            <select id="invoiceFilter">
-              <option value="">All invoices</option>
-              <option value="Unmatched">Unmatched</option>
-              <option value="Matched">Matched</option>
-              <option value="Pending">Pending</option>
-              <option value="Disputed">Disputed</option>
-              <option value="Paid">Paid</option>
-            </select>
-          </label>
-          <label>
-            Source
-            <select id="sourceFilter">
-              <option value="">All sources</option>
-              <option value="trips">Trips</option>
-              <option value="gmail">Gmail</option>
-              <option value="settlements">Settlements</option>
-              <option value="missing">Gmail missing from Trips</option>
-            </select>
-          </label>
-          <label>
-            Month
-            <select id="monthFilter">
-              <option value="">All months</option>
-            </select>
-          </label>
-          <label>
-            Sort by
-            <select id="sortField">
-              <option value="start">Start date</option>
-              <option value="end">End date</option>
-              <option value="payout">Payout</option>
-              <option value="driver">Driver</option>
-              <option value="trip">Trip ID</option>
-              <option value="pickup">Pickup</option>
-              <option value="dropoff">Dropoff</option>
-              <option value="status">Status</option>
-              <option value="invoice">Invoice</option>
-            </select>
-          </label>
-          <label>
-            Direction
-            <select id="sortDirection">
-              <option value="desc">Descending</option>
-              <option value="asc">Ascending</option>
-            </select>
-          </label>
-        </div>
+      <section class="insight-grid" aria-label="Load insights">
+        <article class="insight-card">
+          <h2>Driver Totals</h2>
+          <div id="driverInsights" class="insight-list"></div>
+        </article>
       </section>
 
-      <section class="workbench">
-        <section class="bulk-actions" id="bulkActions" hidden>
-          <strong id="selectedCount">0 selected</strong>
-          <button id="clearSelectionButton" class="secondary-button" type="button">Clear selection</button>
-          <button id="deleteSelectedButton" class="danger-button" type="button">Delete selected</button>
-        </section>
-        <section class="table-wrap" aria-label="Loads">
+      <section class="workbench" id="loads">
+        <section class="ledger-card">
+          <div class="ledger-toolbar">
+            <div class="load-tabs" role="tablist" aria-label="Load shortcuts">
+              <button class="load-tab active" data-quick-filter="all" type="button">All Loads</button>
+              <button class="load-tab" data-quick-filter="review" type="button">Needs Review</button>
+              <button class="load-tab" data-quick-filter="unpaid" type="button">Unpaid</button>
+              <button class="load-tab" data-quick-filter="completed" type="button">Completed</button>
+              <button class="load-tab" data-quick-filter="cancelled" type="button">Cancelled</button>
+            </div>
+            <div class="ledger-search">
+              <label class="sr-only" for="quickIdSearchInput">Load ID search</label>
+              <input id="quickIdSearchInput" type="search" placeholder="Search by Trip ID, driver, or location...">
+              <button id="clearQuickIdSearchButton" class="secondary-button" type="button">Clear</button>
+              <button id="filtersButton" class="section-toggle" type="button" aria-expanded="false" aria-controls="filtersPanel">Filters</button>
+            </div>
+          </div>
+
+          <section class="filter-shell" aria-label="Filters">
+            <div class="controls" id="filtersPanel" hidden>
+              <label>
+                Search
+                <input id="searchInput" type="search" placeholder="Trip, driver, city, status">
+              </label>
+              <label>
+                Driver
+                <select id="driverFilter">
+                  <option value="">All drivers</option>
+                </select>
+              </label>
+              <label>
+                Status
+                <select id="statusFilter">
+                  <option value="">All statuses</option>
+                </select>
+              </label>
+              <label>
+                Invoice
+                <select id="invoiceFilter">
+                  <option value="">All invoices</option>
+                  <option value="Unmatched">Unmatched</option>
+                  <option value="Matched">Matched</option>
+                  <option value="Pending">Pending</option>
+                  <option value="Disputed">Disputed</option>
+                  <option value="Paid">Paid</option>
+                </select>
+              </label>
+              <label>
+                Source
+                <select id="sourceFilter">
+                  <option value="">All sources</option>
+                  <option value="trips">Trips</option>
+                  <option value="gmail">Gmail</option>
+                  <option value="settlements">Settlements</option>
+                  <option value="missing">Gmail missing from Trips</option>
+                </select>
+              </label>
+              <label>
+                Month
+                <select id="monthFilter">
+                  <option value="">All months</option>
+                </select>
+              </label>
+              <label>
+                Sort by
+                <select id="sortField">
+                  <option value="start">Start date</option>
+                  <option value="end">End date</option>
+                  <option value="payout">Payout</option>
+                  <option value="driver">Driver</option>
+                  <option value="trip">Trip ID</option>
+                  <option value="pickup">Pickup</option>
+                  <option value="dropoff">Dropoff</option>
+                  <option value="status">Status</option>
+                  <option value="invoice">Invoice</option>
+                </select>
+              </label>
+              <label>
+                Direction
+                <select id="sortDirection">
+                  <option value="desc">Descending</option>
+                  <option value="asc">Ascending</option>
+                </select>
+              </label>
+            </div>
+          </section>
+
+          <section class="bulk-actions" id="bulkActions" hidden>
+            <strong id="selectedCount">0 selected</strong>
+            <button id="clearSelectionButton" class="secondary-button" type="button">Clear selection</button>
+            <button id="deleteSelectedButton" class="danger-button" type="button">Delete selected</button>
+          </section>
+
+          <section class="table-wrap" aria-label="Loads">
           <table>
             <thead>
               <tr>
@@ -155,12 +199,13 @@
                 <th><button class="sort-header" data-sort="status" type="button">Status</button></th>
                 <th><button class="sort-header" data-sort="source" type="button">Source</button></th>
                 <th><button class="sort-header" data-sort="invoice" type="button">Invoice</button></th>
-                <th>Notes</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody id="loadsBody"></tbody>
           </table>
           <div id="emptyState" class="empty-state" hidden>No loads match the current filters.</div>
+        </section>
         </section>
       </section>
     </main>
@@ -172,7 +217,7 @@
         </td>
         <td data-field="trip" data-label="Trip"></td>
         <td data-field="driver" data-label="Driver">
-          <input data-action="driver" type="text" list="driverOptions" placeholder="Unassigned">
+          <select data-action="driver"></select>
         </td>
         <td data-field="origin" data-label="Pickup"></td>
         <td data-field="destination" data-label="Dropoff"></td>
@@ -180,24 +225,34 @@
         <td data-field="payout" data-label="Payout"></td>
         <td data-field="status" data-label="Status"></td>
         <td data-field="source" data-label="Source"></td>
-        <td data-label="Invoice">
-          <select data-action="invoice">
-            <option>Unmatched</option>
-            <option>Matched</option>
-            <option>Pending</option>
-            <option>Disputed</option>
-            <option>Paid</option>
-          </select>
+        <td data-field="invoice" data-label="Invoice">
+          <span data-field="invoice-status"></span>
         </td>
-        <td data-label="Notes">
-          <button class="note-button" data-action="show-note" type="button">Note</button>
-          <input data-action="notes" type="text" placeholder="Add note" hidden>
+        <td data-field="actions" data-label="Actions">
+          <span class="note-preview" data-field="note-preview" hidden></span>
+          <button class="kebab-button" data-action="toggle-actions" type="button" aria-label="Edit load">
+            <span></span>
+            <span></span>
+            <span></span>
+          </button>
+          <div class="row-action-menu" data-field="action-menu" hidden>
+            <label>
+              Invoice
+              <select data-action="invoice">
+                <option>Unmatched</option>
+                <option>Matched</option>
+                <option>Pending</option>
+                <option>Disputed</option>
+                <option>Paid</option>
+              </select>
+            </label>
+            <button class="secondary-button" data-action="toggle-review" type="button">Mark for review</button>
+            <button class="secondary-button" data-action="show-note" type="button">Add note</button>
+            <input data-action="notes" type="text" placeholder="Add note" hidden>
+          </div>
         </td>
       </tr>
     </template>
-
-    <datalist id="driverOptions"></datalist>
-
     <script src="app.js"></script>
   </body>
 </html>

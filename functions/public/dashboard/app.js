@@ -9,7 +9,9 @@ const state = {
   scans: [],
   accounts: [],
   selectedLoadIds: new Set(),
+  quickFilter: "all",
   filters: {
+    id: "",
     search: "",
     driver: "",
     status: "",
@@ -43,9 +45,11 @@ const elements = {
   unpaidPayout: document.querySelector("#unpaidPayout"),
   needsReview: document.querySelector("#needsReview"),
   gmailMissing: document.querySelector("#gmailMissing"),
+  driverInsights: document.querySelector("#driverInsights"),
+  quickIdSearchInput: document.querySelector("#quickIdSearchInput"),
+  clearQuickIdSearchButton: document.querySelector("#clearQuickIdSearchButton"),
   searchInput: document.querySelector("#searchInput"),
   driverFilter: document.querySelector("#driverFilter"),
-  driverOptions: document.querySelector("#driverOptions"),
   statusFilter: document.querySelector("#statusFilter"),
   invoiceFilter: document.querySelector("#invoiceFilter"),
   sourceFilter: document.querySelector("#sourceFilter"),
@@ -56,6 +60,7 @@ const elements = {
   selectedCount: document.querySelector("#selectedCount"),
   clearSelectionButton: document.querySelector("#clearSelectionButton"),
   deleteSelectedButton: document.querySelector("#deleteSelectedButton"),
+  quickFilterButtons: [...document.querySelectorAll("[data-quick-filter]")],
   sortHeaders: [...document.querySelectorAll("[data-sort]")],
   loadsBody: document.querySelector("#loadsBody"),
   emptyState: document.querySelector("#emptyState"),
@@ -75,6 +80,21 @@ elements.clearSelectionButton.addEventListener("click", () => {
   render();
 });
 elements.deleteSelectedButton.addEventListener("click", deleteSelectedLoads);
+elements.quickIdSearchInput.addEventListener("input", (event) => {
+  state.filters.id = normalizeSearchId(event.target.value);
+  render();
+});
+elements.clearQuickIdSearchButton.addEventListener("click", () => {
+  state.filters.id = "";
+  elements.quickIdSearchInput.value = "";
+  render();
+});
+elements.quickFilterButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    state.quickFilter = button.dataset.quickFilter || "all";
+    render();
+  });
+});
 elements.connectGmailButton.addEventListener("click", () => {
   window.open(`${cleanBaseUrl()}/auth/google/start`, "_blank", "noopener,noreferrer");
 });
@@ -154,6 +174,7 @@ elements.sortHeaders.forEach((button) => {
     render();
   });
 });
+document.addEventListener("click", closeActionMenus);
 
 loadDashboard();
 
@@ -300,21 +321,11 @@ function defaultBackendUrl() {
 function populateFilterOptions() {
   const loads = ledgerLoads();
   replaceOptions(elements.driverFilter, "All drivers", uniqueValues(loads.map((load) => displayDriver(load.driverName))));
-  replaceDriverDatalist(uniqueValues(loads.map((load) => normalizeDriverName(load.driverName)).filter(Boolean)));
   replaceOptions(elements.statusFilter, "All statuses", uniqueValues(loads.map((load) => displayStatusLabel(load))));
   replaceOptionsFromPairs(elements.monthFilter, "All months", monthFilterOptions());
   elements.driverFilter.value = state.filters.driver;
   elements.statusFilter.value = state.filters.status;
   elements.monthFilter.value = state.filters.month;
-}
-
-function replaceDriverDatalist(values) {
-  elements.driverOptions.replaceChildren();
-  values.forEach((value) => {
-    const option = document.createElement("option");
-    option.value = titleCaseCity(value);
-    elements.driverOptions.append(option);
-  });
 }
 
 function replaceOptions(select, label, values) {
@@ -347,9 +358,19 @@ function render() {
   pruneSelectedLoads();
   const filtered = sortedLoads(filteredLoads());
   renderSortHeaders();
+  renderQuickFilters();
   renderSummary(filtered);
+  renderInsights(filtered);
   renderTable(filtered);
   renderBulkActions();
+}
+
+function renderQuickFilters() {
+  elements.quickFilterButtons.forEach((button) => {
+    const active = (button.dataset.quickFilter || "all") === state.quickFilter;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
 }
 
 function sortedLoads(loads) {
@@ -423,7 +444,8 @@ function filteredLoads() {
       load.notes
     ].join(" ").toLowerCase();
 
-    if (state.filters.search && !searchable.includes(state.filters.search)) return false;
+    if (state.filters.id && !loadIdMatches(load, state.filters.id)) return false;
+    if (state.filters.search && !searchable.includes(state.filters.search) && !loadIdMatches(load, normalizeSearchId(state.filters.search))) return false;
     if (state.filters.driver && displayDriver(load.driverName) !== state.filters.driver) return false;
     if (state.filters.status && displayStatusLabel(load) !== state.filters.status) return false;
     if (state.filters.invoice && (load.invoiceStatus || "Unmatched") !== state.filters.invoice) return false;
@@ -432,8 +454,44 @@ function filteredLoads() {
     if (state.filters.source === "settlements" && !sourceHas(load, "settlements")) return false;
     if (state.filters.source === "missing" && !(sourceHas(load, "gmail") && !sourceHas(load, "trips") && load.missingFromTrips)) return false;
     if (state.filters.month && weekRangeForLoad(load).monthKey !== state.filters.month) return false;
+    if (!quickFilterMatches(load)) return false;
     return true;
   });
+}
+
+function quickFilterMatches(load) {
+  switch (state.quickFilter) {
+    case "review":
+      return needsReview(load);
+    case "unpaid":
+      return !isInvoicePaid(load);
+    case "completed":
+      return displayStatusLabel(load) === "Completed";
+    case "cancelled":
+      return displayStatusLabel(load).includes("Cancelled");
+    default:
+      return true;
+  }
+}
+
+function loadIdMatches(load, query) {
+  const normalizedQuery = normalizeSearchId(query);
+  if (!normalizedQuery) return true;
+  return loadIdSearchValues(load).some((value) => value.includes(normalizedQuery) || value.endsWith(normalizedQuery));
+}
+
+function loadIdSearchValues(load) {
+  return uniqueValues([
+    load.id,
+    load.amazonTripId,
+    load.amazonLoadId,
+    load.shortCode,
+    load.parentTourId
+  ].map(normalizeSearchId).filter(Boolean));
+}
+
+function normalizeSearchId(value) {
+  return String(value || "").replace(/[^a-z0-9]/gi, "").toUpperCase();
 }
 
 function ledgerLoads() {
@@ -500,6 +558,51 @@ function renderSummary(loads) {
   elements.gmailMissing.textContent = String(gmailMissing);
 }
 
+function renderInsights(loads) {
+  renderDriverInsights(loads);
+}
+
+function renderDriverInsights(loads) {
+  const totals = new Map();
+  loads.forEach((load) => {
+    const driver = displayDriver(load.driverName);
+    const current = totals.get(driver) || { loads: 0, total: 0, unpaid: 0 };
+    current.loads += 1;
+    current.total += ledgerPayout(load);
+    if (!isInvoicePaid(load)) current.unpaid += ledgerPayout(load);
+    totals.set(driver, current);
+  });
+
+  const rows = [...totals.entries()]
+    .sort((a, b) => b[1].total - a[1].total)
+    .slice(0, 4)
+    .map(([driver, item]) => insightRow(driver, `${item.loads} loads`, currency(item.total), item.unpaid > 0 ? `Unpaid ${currency(item.unpaid)}` : "Paid"));
+
+  elements.driverInsights.replaceChildren(...(rows.length ? rows : [emptyInsight("No driver totals")]));
+}
+
+function insightRow(label, meta, value, extra) {
+  const row = document.createElement("div");
+  row.className = "insight-row";
+  const left = document.createElement("span");
+  left.className = "insight-label";
+  left.textContent = label;
+  const detail = document.createElement("span");
+  detail.className = "insight-meta";
+  detail.textContent = [meta, extra].filter(Boolean).join(" · ");
+  const right = document.createElement("strong");
+  right.textContent = value;
+  row.append(left, detail, right);
+  return row;
+}
+
+function emptyInsight(text) {
+  const row = document.createElement("div");
+  row.className = "insight-empty";
+  row.textContent = text;
+  return row;
+}
+
 function renderTable(loads) {
   elements.loadsBody.replaceChildren();
   elements.emptyState.hidden = loads.length !== 0;
@@ -561,11 +664,11 @@ function loadRow(load) {
       toggleLoadSelection(load.id, select.checked);
     });
     setTripLink(row, load);
-    const driverInput = row.querySelector('[data-action="driver"]');
-    driverInput.value = driverEditorValue(load.driverName);
-    driverInput.title = "Edit driver";
-    driverInput.addEventListener("change", () => {
-      const driverName = normalizeDriverInput(driverInput.value);
+    const driverSelect = row.querySelector('[data-action="driver"]');
+    populateDriverSelect(driverSelect, load.driverName);
+    driverSelect.title = "Set driver";
+    driverSelect.addEventListener("change", () => {
+      const driverName = driverSelect.value;
       updateLoad(load.id, { driverName });
     });
     const route = displayRoute(load);
@@ -578,24 +681,72 @@ function loadRow(load) {
     if (hasDispute(load) && !isCancelledLoad(load) && !isDisputePaid(load)) statusCell.append(disputeBadge(load));
     row.querySelector('[data-field="source"]').append(sourceBadge(load));
 
+    const invoiceText = row.querySelector('[data-field="invoice-status"]');
+    invoiceText.textContent = load.invoiceStatus || "Unmatched";
+
+    const menuButton = row.querySelector('[data-action="toggle-actions"]');
+    const menu = row.querySelector('[data-field="action-menu"]');
     const invoice = row.querySelector('[data-action="invoice"]');
     invoice.value = load.invoiceStatus || "Unmatched";
     invoice.addEventListener("change", () => updateLoad(load.id, { invoiceStatus: invoice.value }));
 
+    menuButton.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const shouldOpen = menu.hidden;
+      closeActionMenus();
+      menu.hidden = !shouldOpen;
+      menuButton.setAttribute("aria-expanded", String(shouldOpen));
+    });
+    menu.addEventListener("click", (event) => event.stopPropagation());
+
+    const reviewButton = row.querySelector('[data-action="toggle-review"]');
+    reviewButton.textContent = load.manualReview ? "Clear review flag" : "Mark for review";
+    reviewButton.addEventListener("click", () => updateLoad(load.id, { manualReview: !load.manualReview }));
+
     const noteButton = row.querySelector('[data-action="show-note"]');
+    const notePreview = row.querySelector('[data-field="note-preview"]');
     const notes = row.querySelector('[data-action="notes"]');
     notes.value = load.notes || "";
-    noteButton.textContent = "Add note";
-    noteButton.hidden = Boolean(load.notes);
-    notes.hidden = !load.notes;
+    noteButton.textContent = load.notes ? "Edit note" : "Add note";
+    if (load.notes) {
+      menuButton.title = `Note: ${load.notes}`;
+      notePreview.textContent = load.notes;
+      notePreview.hidden = false;
+    }
+
     noteButton.addEventListener("click", () => {
-      noteButton.hidden = true;
       notes.hidden = false;
       notes.focus();
+      notes.select();
     });
-    notes.addEventListener("change", () => updateLoad(load.id, { notes: notes.value.trim() }));
+    notes.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        notes.value = load.notes || "";
+        notes.hidden = true;
+        menuButton.focus();
+      }
+      if (event.key === "Enter") {
+        notes.blur();
+      }
+    });
+    notes.addEventListener("blur", () => {
+      if (!notes.value.trim()) notes.hidden = true;
+    });
+    notes.addEventListener("change", () => {
+      updateLoad(load.id, { notes: notes.value.trim() });
+      if (!notes.value.trim()) notes.hidden = true;
+    });
 
     return row;
+}
+
+function closeActionMenus() {
+  document.querySelectorAll('[data-field="action-menu"]').forEach((menu) => {
+    menu.hidden = true;
+  });
+  document.querySelectorAll('[data-action="toggle-actions"]').forEach((button) => {
+    button.setAttribute("aria-expanded", "false");
+  });
 }
 
 function toggleLoadSelection(id, selected) {
@@ -887,6 +1038,7 @@ function statusBadge(load) {
 }
 
 function displayStatusLabel(load) {
+  if (load.manualReview) return "Needs review";
   if (load.missingFromTrips && !isDisputePaid(load) && !isInvoicePaid(load)) return "Needs review";
   const status = String(load.status || load.currentTripStatus || "Unknown").trim();
   if (/^history$/i.test(status)) return "Completed";
@@ -951,6 +1103,7 @@ function isInvoicePaid(load) {
 }
 
 function needsReview(load) {
+  if (load.manualReview) return true;
   if (isDisputePaid(load) || isInvoicePaid(load)) return false;
   return Boolean(load.missingFromTrips || load.status === "Needs review" || load.invoiceStatus === "Disputed");
 }
@@ -959,8 +1112,15 @@ async function updateLoad(id, patch) {
   try {
     await apiPatch(`/loads/${encodeURIComponent(id)}`, patch);
     const index = state.loads.findIndex((load) => load.id === id);
-    if (index >= 0) state.loads[index] = { ...state.loads[index], ...patch };
-    if (Object.prototype.hasOwnProperty.call(patch, "driverName")) populateFilterOptions();
+    if (index >= 0) {
+      state.loads[index] = { ...state.loads[index], ...patch };
+      if (Object.prototype.hasOwnProperty.call(patch, "driverName")) {
+        state.loads[index] = { ...state.loads[index], driverName: normalizeDriverName(patch.driverName), manualDriverOverride: true };
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(patch, "driverName") || Object.prototype.hasOwnProperty.call(patch, "manualReview")) {
+      populateFilterOptions();
+    }
     render();
     setStatus("Saved change.");
   } catch (error) {
@@ -968,15 +1128,21 @@ async function updateLoad(id, patch) {
   }
 }
 
-function driverEditorValue(value) {
-  const normalized = normalizeDriverName(value);
-  return normalized ? titleCaseCity(normalized) : "";
+function populateDriverSelect(select, currentDriver) {
+  const normalizedCurrent = normalizeDriverName(currentDriver);
+  const values = driverOptionValues();
+  if (normalizedCurrent && !values.includes(normalizedCurrent)) values.push(normalizedCurrent);
+  select.replaceChildren(new Option("Unassigned", ""));
+  values.forEach((value) => select.append(new Option(titleCaseCity(value), value)));
+  select.value = normalizedCurrent || "";
 }
 
-function normalizeDriverInput(value) {
-  const text = String(value || "").replace(/\s+/g, " ").trim();
-  if (!text || /^unassigned$/i.test(text)) return "";
-  return normalizeDriverName(text);
+function driverOptionValues() {
+  return uniqueValues(ledgerLoads().map((load) => normalizeDriverName(load.driverName)).filter(Boolean)).sort((a, b) => {
+    if (a === "RANJIT SINGH") return -1;
+    if (b === "RANJIT SINGH") return 1;
+    return a.localeCompare(b);
+  });
 }
 
 function cleanPlace(value) {

@@ -451,6 +451,7 @@ app.patch("/loads/:id", requireApiKey, async (req, res) => {
     "invoiceStatus",
     "invoiceNumber",
     "notes",
+    "manualReview",
     "settlementWeek",
     "origin",
     "destination",

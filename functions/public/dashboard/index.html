@@ -136,10 +136,16 @@
       </section>
 
       <section class="workbench">
+        <section class="bulk-actions" id="bulkActions" hidden>
+          <strong id="selectedCount">0 selected</strong>
+          <button id="clearSelectionButton" class="secondary-button" type="button">Clear selection</button>
+          <button id="deleteSelectedButton" class="danger-button" type="button">Delete selected</button>
+        </section>
         <section class="table-wrap" aria-label="Loads">
           <table>
             <thead>
               <tr>
+                <th class="select-col">Select</th>
                 <th><button class="sort-header" data-sort="trip" type="button">Trip ID</button></th>
                 <th><button class="sort-header" data-sort="driver" type="button">Driver</button></th>
                 <th><button class="sort-header" data-sort="pickup" type="button">Pickup</button></th>
@@ -161,8 +167,13 @@
 
     <template id="loadRowTemplate">
       <tr>
+        <td data-field="select" data-label="Select">
+          <input data-action="select-load" type="checkbox" aria-label="Select load">
+        </td>
         <td data-field="trip" data-label="Trip"></td>
-        <td data-field="driver" data-label="Driver"></td>
+        <td data-field="driver" data-label="Driver">
+          <input data-action="driver" type="text" list="driverOptions" placeholder="Unassigned">
+        </td>
         <td data-field="origin" data-label="Pickup"></td>
         <td data-field="destination" data-label="Dropoff"></td>
         <td data-field="start" data-label="Start"></td>
@@ -184,6 +195,8 @@
         </td>
       </tr>
     </template>
+
+    <datalist id="driverOptions"></datalist>
 
     <script src="app.js"></script>
   </body>

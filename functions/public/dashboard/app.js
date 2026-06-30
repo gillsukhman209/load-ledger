@@ -8,6 +8,7 @@ const state = {
   settlements: [],
   scans: [],
   accounts: [],
+  selectedLoadIds: new Set(),
   filters: {
     search: "",
     driver: "",
@@ -44,12 +45,17 @@ const elements = {
   gmailMissing: document.querySelector("#gmailMissing"),
   searchInput: document.querySelector("#searchInput"),
   driverFilter: document.querySelector("#driverFilter"),
+  driverOptions: document.querySelector("#driverOptions"),
   statusFilter: document.querySelector("#statusFilter"),
   invoiceFilter: document.querySelector("#invoiceFilter"),
   sourceFilter: document.querySelector("#sourceFilter"),
   monthFilter: document.querySelector("#monthFilter"),
   sortField: document.querySelector("#sortField"),
   sortDirection: document.querySelector("#sortDirection"),
+  bulkActions: document.querySelector("#bulkActions"),
+  selectedCount: document.querySelector("#selectedCount"),
+  clearSelectionButton: document.querySelector("#clearSelectionButton"),
+  deleteSelectedButton: document.querySelector("#deleteSelectedButton"),
   sortHeaders: [...document.querySelectorAll("[data-sort]")],
   loadsBody: document.querySelector("#loadsBody"),
   emptyState: document.querySelector("#emptyState"),
@@ -64,6 +70,11 @@ elements.sortField.value = state.sort.field;
 elements.sortDirection.value = state.sort.direction;
 
 elements.refreshButton.addEventListener("click", loadDashboard);
+elements.clearSelectionButton.addEventListener("click", () => {
+  state.selectedLoadIds.clear();
+  render();
+});
+elements.deleteSelectedButton.addEventListener("click", deleteSelectedLoads);
 elements.connectGmailButton.addEventListener("click", () => {
   window.open(`${cleanBaseUrl()}/auth/google/start`, "_blank", "noopener,noreferrer");
 });
@@ -238,6 +249,22 @@ async function apiPatch(path, payload) {
   return body;
 }
 
+async function apiDelete(path, payload) {
+  const response = await fetch(`${cleanBaseUrl()}${path}`, {
+    method: "DELETE",
+    headers: {
+      "Content-Type": "application/json",
+      ...apiHeaders()
+    },
+    body: JSON.stringify(payload)
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || body.ok === false) {
+    throw new Error(body.error || `HTTP ${response.status}`);
+  }
+  return body;
+}
+
 async function apiPost(path, payload) {
   const response = await fetch(`${cleanBaseUrl()}${path}`, {
     method: "POST",
@@ -273,11 +300,21 @@ function defaultBackendUrl() {
 function populateFilterOptions() {
   const loads = ledgerLoads();
   replaceOptions(elements.driverFilter, "All drivers", uniqueValues(loads.map((load) => displayDriver(load.driverName))));
+  replaceDriverDatalist(uniqueValues(loads.map((load) => normalizeDriverName(load.driverName)).filter(Boolean)));
   replaceOptions(elements.statusFilter, "All statuses", uniqueValues(loads.map((load) => displayStatusLabel(load))));
   replaceOptionsFromPairs(elements.monthFilter, "All months", monthFilterOptions());
   elements.driverFilter.value = state.filters.driver;
   elements.statusFilter.value = state.filters.status;
   elements.monthFilter.value = state.filters.month;
+}
+
+function replaceDriverDatalist(values) {
+  elements.driverOptions.replaceChildren();
+  values.forEach((value) => {
+    const option = document.createElement("option");
+    option.value = titleCaseCity(value);
+    elements.driverOptions.append(option);
+  });
 }
 
 function replaceOptions(select, label, values) {
@@ -307,10 +344,12 @@ function monthFilterOptions() {
 }
 
 function render() {
+  pruneSelectedLoads();
   const filtered = sortedLoads(filteredLoads());
   renderSortHeaders();
   renderSummary(filtered);
   renderTable(filtered);
+  renderBulkActions();
 }
 
 function sortedLoads(loads) {
@@ -477,7 +516,10 @@ function weekHeaderRow(week) {
   const row = document.createElement("tr");
   row.className = "week-row";
   const cell = document.createElement("td");
-  cell.colSpan = 10;
+  cell.colSpan = 11;
+  const weekIds = week.loads.map((load) => load.id).filter(Boolean);
+  const allSelected = weekIds.length > 0 && weekIds.every((id) => state.selectedLoadIds.has(id));
+  const partiallySelected = weekIds.some((id) => state.selectedLoadIds.has(id));
   const settlement = settlementSummaryForWeek(week.contextId);
   const settlementMarkup = settlement.count > 0
     ? `
@@ -489,6 +531,10 @@ function weekHeaderRow(week) {
     : `<span>No Amazon payment row</span>`;
   cell.innerHTML = `
     <div class="week-summary">
+      <label class="week-select">
+        <input data-action="select-week" type="checkbox" ${allSelected ? "checked" : ""}>
+        <span>Select week</span>
+      </label>
       <strong>${week.label}</strong>
       <span>${week.loads.length} loads</span>
       <span>Total ${currency(week.total)}</span>
@@ -497,6 +543,11 @@ function weekHeaderRow(week) {
       ${settlementMarkup}
     </div>
   `;
+  const checkbox = cell.querySelector('[data-action="select-week"]');
+  checkbox.indeterminate = partiallySelected && !allSelected;
+  checkbox.addEventListener("change", () => {
+    toggleWeekSelection(weekIds, checkbox.checked);
+  });
   row.append(cell);
   return row;
 }
@@ -504,8 +555,19 @@ function weekHeaderRow(week) {
 function loadRow(load) {
     const row = elements.rowTemplate.content.firstElementChild.cloneNode(true);
     row.dataset.id = load.id;
+    const select = row.querySelector('[data-action="select-load"]');
+    select.checked = state.selectedLoadIds.has(load.id);
+    select.addEventListener("change", () => {
+      toggleLoadSelection(load.id, select.checked);
+    });
     setTripLink(row, load);
-    setCell(row, "driver", displayDriver(load.driverName));
+    const driverInput = row.querySelector('[data-action="driver"]');
+    driverInput.value = driverEditorValue(load.driverName);
+    driverInput.title = "Edit driver";
+    driverInput.addEventListener("change", () => {
+      const driverName = normalizeDriverInput(driverInput.value);
+      updateLoad(load.id, { driverName });
+    });
     const route = displayRoute(load);
     setCell(row, "origin", route.origin);
     setCell(row, "destination", route.destination);
@@ -534,6 +596,64 @@ function loadRow(load) {
     notes.addEventListener("change", () => updateLoad(load.id, { notes: notes.value.trim() }));
 
     return row;
+}
+
+function toggleLoadSelection(id, selected) {
+  if (!id) return;
+  if (selected) {
+    state.selectedLoadIds.add(id);
+  } else {
+    state.selectedLoadIds.delete(id);
+  }
+  render();
+}
+
+function toggleWeekSelection(ids, selected) {
+  ids.forEach((id) => {
+    if (selected) {
+      state.selectedLoadIds.add(id);
+    } else {
+      state.selectedLoadIds.delete(id);
+    }
+  });
+  render();
+}
+
+function pruneSelectedLoads() {
+  const validIds = new Set(state.loads.map((load) => load.id).filter(Boolean));
+  [...state.selectedLoadIds].forEach((id) => {
+    if (!validIds.has(id)) state.selectedLoadIds.delete(id);
+  });
+}
+
+function renderBulkActions() {
+  const count = state.selectedLoadIds.size;
+  elements.bulkActions.hidden = count === 0;
+  elements.selectedCount.textContent = `${count} selected`;
+  elements.deleteSelectedButton.disabled = count === 0;
+}
+
+async function deleteSelectedLoads() {
+  const ids = [...state.selectedLoadIds];
+  if (ids.length === 0) return;
+
+  const confirmed = window.confirm(`Delete ${ids.length} selected load${ids.length === 1 ? "" : "s"} from the ledger? This cannot be undone.`);
+  if (!confirmed) return;
+
+  elements.deleteSelectedButton.disabled = true;
+  setStatus(`Deleting ${ids.length} load${ids.length === 1 ? "" : "s"}...`);
+  try {
+    const result = await apiDelete("/loads", { ids });
+    const deletedIds = new Set(ids);
+    state.loads = state.loads.filter((load) => !deletedIds.has(load.id));
+    state.selectedLoadIds.clear();
+    populateFilterOptions();
+    render();
+    setStatus(`Deleted ${result.deleted || ids.length} load${ids.length === 1 ? "" : "s"}.`);
+  } catch (error) {
+    setStatus(`Delete failed: ${error.message}`);
+    renderBulkActions();
+  }
 }
 
 function groupLoadsByWeek(loads) {
@@ -840,11 +960,23 @@ async function updateLoad(id, patch) {
     await apiPatch(`/loads/${encodeURIComponent(id)}`, patch);
     const index = state.loads.findIndex((load) => load.id === id);
     if (index >= 0) state.loads[index] = { ...state.loads[index], ...patch };
+    if (Object.prototype.hasOwnProperty.call(patch, "driverName")) populateFilterOptions();
     render();
     setStatus("Saved change.");
   } catch (error) {
     setStatus(`Save failed: ${error.message}`);
   }
+}
+
+function driverEditorValue(value) {
+  const normalized = normalizeDriverName(value);
+  return normalized ? titleCaseCity(normalized) : "";
+}
+
+function normalizeDriverInput(value) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text || /^unassigned$/i.test(text)) return "";
+  return normalizeDriverName(text);
 }
 
 function cleanPlace(value) {

@@ -182,6 +182,43 @@ button:focus {
   display: block;
 }
 
+.bulk-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.bulk-actions strong {
+  margin-right: auto;
+  color: #344054;
+  font-size: 13px;
+}
+
+.secondary-button {
+  background: #fff;
+  color: var(--blue);
+}
+
+.secondary-button:hover {
+  background: #eef6fc;
+}
+
+.danger-button {
+  border-color: var(--red);
+  background: var(--red);
+}
+
+.danger-button:hover {
+  background: #912018;
+}
+
 .table-wrap {
   overflow: auto;
   max-width: 100%;
@@ -193,7 +230,7 @@ button:focus {
 
 table {
   width: 100%;
-  min-width: 940px;
+  min-width: 980px;
   border-collapse: collapse;
   table-layout: fixed;
 }
@@ -217,6 +254,19 @@ th {
   background: #edf3f8;
   color: #344054;
   font-size: 12px;
+}
+
+.select-col,
+td[data-field="select"] {
+  width: 58px;
+  text-align: center;
+}
+
+input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--blue);
 }
 
 .sort-header {
@@ -265,6 +315,20 @@ tbody tr:hover {
   padding: 10px 12px;
   color: #344054;
   font-size: 12px;
+}
+
+.week-select {
+  display: inline-flex;
+  grid-auto-flow: column;
+  align-items: center;
+  gap: 6px;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.week-select span {
+  color: #344054;
 }
 
 .week-summary strong {
@@ -369,6 +433,23 @@ td select {
   min-width: 130px;
 }
 
+td[data-field="driver"] input {
+  min-width: 0;
+  width: 100%;
+  max-width: 150px;
+  height: 30px;
+  border-color: transparent;
+  background: transparent;
+  padding: 0;
+  font-weight: 600;
+}
+
+td[data-field="driver"] input:focus {
+  border-color: #c7d0dc;
+  background: #fff;
+  padding: 0 8px;
+}
+
 .note-button {
   height: 30px;
   padding: 0 10px;
@@ -461,6 +542,17 @@ td input[data-action="notes"] {
     gap: 12px;
   }
 
+  .bulk-actions {
+    align-items: stretch;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .bulk-actions strong {
+    grid-column: 1 / -1;
+    margin-right: 0;
+  }
+
   .table-wrap {
     overflow: visible;
     background: transparent;
@@ -532,9 +624,25 @@ td input[data-action="notes"] {
     font-size: 15px;
   }
 
+  tbody tr:not(.week-row) td[data-field="select"] {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  tbody tr:not(.week-row) td[data-field="select"]::before {
+    margin-right: auto;
+    align-self: center;
+  }
+
   tbody tr:not(.week-row) td[data-field="driver"] {
     grid-column: 2 / 3;
     justify-items: end;
+    text-align: right;
+  }
+
+  tbody tr:not(.week-row) td[data-field="driver"] input {
+    max-width: 150px;
     text-align: right;
   }
 
@@ -586,6 +694,10 @@ td input[data-action="notes"] {
     font-size: 17px;
   }
 
+  .week-select {
+    grid-column: 1 / -1;
+  }
+
   .week-row td {
     display: block;
     border: 0;
@@ -623,6 +735,11 @@ td input[data-action="notes"] {
   tbody tr:not(.week-row) td[data-field="driver"] {
     grid-column: 1 / -1;
     justify-items: start;
+    text-align: left;
+  }
+
+  tbody tr:not(.week-row) td[data-field="driver"] input {
+    max-width: 100%;
     text-align: left;
   }
 }

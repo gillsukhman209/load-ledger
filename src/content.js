@@ -464,16 +464,46 @@ function formatShortDate(value) {
 }
 
 function inferStatus(tour, responseUrl) {
+  const explicitStatus = explicitEntityStatus(tour);
+  if (explicitStatus) return explicitStatus;
+
   const url = String(responseUrl || "").toLowerCase();
-  if (url.includes("history")) return "History";
   if (url.includes("intransit") || url.includes("in-transit")) return "In Transit";
   if (url.includes("upcoming")) return "Upcoming";
+  if (url.includes("history")) return "History";
 
   const state = String(tour.tourState || tour.executionStatus || "").toLowerCase();
   if (state.includes("complete")) return "History";
   if (state.includes("transit") || state.includes("started")) return "In Transit";
   if (state) return titleCase(state.replace(/_/g, " "));
   return currentTabLabel() || "";
+}
+
+function explicitEntityStatus(entity) {
+  if (!entity || typeof entity !== "object") return "";
+  if (entity.cancelled || entity.canceled || entity.isCancelled || entity.isCanceled) return "Cancelled";
+
+  const candidates = [
+    entity.status,
+    entity.currentTripStatus,
+    entity.tripStatus,
+    entity.tourStatus,
+    entity.tourState,
+    entity.loadStatus,
+    entity.executionStatus,
+    entity.cancellationStatus,
+    entity.cancelationStatus,
+    entity.cancelledStatus,
+    entity.canceledStatus,
+    entity.state,
+    entity.lifecycleStatus
+  ];
+  const text = candidates.map((value) => String(value || "")).join(" ").toLowerCase();
+  if (/\bcancell?ed\b|\bcancelled\b|\bcanceled\b/.test(text)) return "Cancelled";
+  if (/\bin[\s_-]*transit\b|\bstarted\b/.test(text)) return "In Transit";
+  if (/\bupcoming\b|\bplanned\b|\bscheduled\b/.test(text)) return "Upcoming";
+  if (/\bcomplete(d)?\b|\bdelivered\b|\bhistory\b/.test(text)) return "History";
+  return "";
 }
 
 function currentTabLabel() {
@@ -554,6 +584,9 @@ function mergeTrip(existing = {}, incoming = {}) {
       merged[key] = value;
       continue;
     }
+    if (key === "status" && isCancelledStatus(existing.status) && isHistoryStatus(value)) {
+      continue;
+    }
     if (value !== "" && value !== null && value !== undefined) {
       merged[key] = value;
     } else if (!(key in merged)) {
@@ -561,6 +594,14 @@ function mergeTrip(existing = {}, incoming = {}) {
     }
   }
   return merged;
+}
+
+function isCancelledStatus(value) {
+  return /cancell?ed/i.test(String(value || ""));
+}
+
+function isHistoryStatus(value) {
+  return /^history$/i.test(String(value || ""));
 }
 
 function scanDomForTrips() {
@@ -640,7 +681,7 @@ function parseDomTripRow(tripId, text) {
   return {
     tripId,
     driver,
-    status: currentTabLabel(),
+    status: inferDomStatus(text) || currentTabLabel(),
     pickup: locationLines[0] || "",
     dropoff: locationLines[1] || "",
     startTime: formatShortDate(dateLines[0] || ""),
@@ -653,6 +694,14 @@ function parseDomTripRow(tripId, text) {
     sourceUrl: window.location.href,
     lastSyncedAt: new Date().toISOString()
   };
+}
+
+function inferDomStatus(text) {
+  const normalized = String(text || "").toLowerCase();
+  if (/\bcancell?ed\b|\bcancelled\b|\bcanceled\b/.test(normalized)) return "Cancelled";
+  if (/\bin\s*transit\b/.test(normalized)) return "In Transit";
+  if (/\bupcoming\b/.test(normalized)) return "Upcoming";
+  return "";
 }
 
 async function syncTrips(reason) {

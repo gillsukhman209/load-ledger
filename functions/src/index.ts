@@ -465,6 +465,11 @@ app.patch("/loads/:id", requireApiKey, async (req, res) => {
     }
   }
 
+  if (Object.prototype.hasOwnProperty.call(update, "driverName")) {
+    update.driverName = normalizeDriverName(update.driverName || "");
+    update.manualDriverOverride = true;
+  }
+
   if (Object.keys(update).length === 0) {
     res.status(400).json({ ok: false, error: "No supported fields to update" });
     return;
@@ -473,6 +478,35 @@ app.patch("/loads/:id", requireApiKey, async (req, res) => {
   update.updatedAt = now();
   await db.collection("loads").doc(id).set(update, { merge: true });
   res.json({ ok: true, id, updated: Object.keys(update) });
+});
+
+app.delete("/loads", requireApiKey, async (req, res) => {
+  const ids: string[] = Array.isArray(req.body?.ids)
+    ? Array.from(new Set<string>(req.body.ids.map((id: unknown) => String(id || "").trim()).filter(Boolean)))
+    : [];
+
+  if (ids.length === 0) {
+    res.status(400).json({ ok: false, error: "Missing load IDs" });
+    return;
+  }
+
+  if (ids.length > 5000) {
+    res.status(400).json({ ok: false, error: "Too many load IDs. Delete 5000 or fewer at a time." });
+    return;
+  }
+
+  let deleted = 0;
+  for (let index = 0; index < ids.length; index += 450) {
+    const batch = db.batch();
+    const chunk = ids.slice(index, index + 450);
+    chunk.forEach((id) => {
+      batch.delete(db.collection("loads").doc(id));
+      deleted += 1;
+    });
+    await batch.commit();
+  }
+
+  res.json({ ok: true, requested: ids.length, deleted });
 });
 
 app.get("/tripScans", requireApiKey, async (req, res) => {
@@ -621,9 +655,11 @@ app.post("/trips/sync", requireApiKey, async (req, res) => {
           source: mergeSource(match.data.source, "trips"),
           amazonTripId: trip.tripId,
           parentTourId: trip.parentTourId || match.data.parentTourId || "",
-          driverName: normalizeDriverName(trip.driver || match.data.driverName || ""),
-          status: trip.status || match.data.status || "seen_in_trips",
-          currentTripStatus: trip.status || "",
+          driverName: match.data.manualDriverOverride
+            ? normalizeDriverName(match.data.driverName || "")
+            : normalizeDriverName(trip.driver || match.data.driverName || ""),
+          status: mergedTripStatus(match.data.status, trip.status),
+          currentTripStatus: mergedTripStatus(match.data.currentTripStatus, trip.status),
           origin: trip.pickup || match.data.origin || "",
           destination: trip.dropoff || match.data.destination || "",
           payout: parseMoney(trip.payout) ?? match.data.payout ?? null,
@@ -735,6 +771,17 @@ function tripIdVariants(value: string) {
 
 function sourceHas(source: unknown, value: string) {
   return String(source || "").split("+").includes(value);
+}
+
+function mergedTripStatus(existing: unknown, incoming: unknown) {
+  const existingStatus = String(existing || "").trim();
+  const incomingStatus = String(incoming || "").trim();
+  if (isCancelledStatus(existingStatus) && /^history$/i.test(incomingStatus)) return existingStatus;
+  return incomingStatus || existingStatus || "seen_in_trips";
+}
+
+function isCancelledStatus(value: unknown) {
+  return /cancell?ed/i.test(String(value || ""));
 }
 
 function mergeSource(source: unknown, value: string) {

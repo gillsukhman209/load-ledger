@@ -27,6 +27,7 @@ type RelayTrip = {
   dropoff?: string;
   startTime?: string;
   endTime?: string;
+  miles?: number | string;
   payout?: number | string;
   equipment?: string;
   loadCount?: number | string;
@@ -46,6 +47,7 @@ type GmailLoad = {
   destination?: string;
   payout?: number | null;
   gmailPayout?: number | null;
+  totalMiles?: number | null;
   pickupDate?: string;
   bookedAt?: string;
   driverName?: string;
@@ -130,6 +132,12 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
   return Math.min(Math.max(Math.round(number), min), max);
 }
 
+function boundedDecimal(value: unknown, min: number, max: number, fallback: number) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.round(Math.min(Math.max(number, min), max) * 100) / 100;
+}
+
 function requireApiKey(req: express.Request, res: express.Response, next: express.NextFunction) {
   const expected = getEnv("LEDGER_API_KEY");
   if (!expected) {
@@ -202,7 +210,8 @@ app.get("/auth/google/start", (_req, res) => {
   const client = oauthClient();
   const url = client.generateAuthUrl({
     access_type: "offline",
-    prompt: "consent",
+    prompt: "consent select_account",
+    include_granted_scopes: false,
     scope: [
       "https://www.googleapis.com/auth/gmail.readonly",
       "https://www.googleapis.com/auth/userinfo.email"
@@ -232,12 +241,62 @@ app.get("/auth/google/callback", async (req, res) => {
 
   const existing = await db.collection("gmailAccounts").doc(email).get();
   const existingRefreshToken = existing.data()?.refreshToken || "";
+  const existingScope = existing.data()?.tokenScope || "";
   const refreshToken = tokens.refresh_token || existingRefreshToken;
+  const tokenScope = tokens.scope || existingScope || "";
+  if (!hasGmailReadScope(tokenScope)) {
+    await db.collection("gmailAccounts").doc(email).set(
+      {
+        email,
+        connectionError: "Gmail read permission was not granted.",
+        tokenScope,
+        updatedAt: now()
+      },
+      { merge: true }
+    );
+    res.status(400).send(`
+      <!doctype html>
+      <html>
+        <head><title>Gmail Permission Missing</title></head>
+        <body style="font-family: system-ui; padding: 32px; max-width: 720px;">
+          <h1>Gmail permission missing</h1>
+          <p>Google did not grant Gmail read access, so Relay Load Ledger cannot sync emails yet.</p>
+          <p>Go back to the dashboard, click <strong>Connect Gmail</strong>, choose the Gmail account, and approve Gmail read access.</p>
+        </body>
+      </html>
+    `);
+    return;
+  }
+
+  if (!refreshToken) {
+    await db.collection("gmailAccounts").doc(email).set(
+      {
+        email,
+        connectionError: "Google did not return a refresh token.",
+        tokenScope,
+        updatedAt: now()
+      },
+      { merge: true }
+    );
+    res.status(400).send(`
+      <!doctype html>
+      <html>
+        <head><title>Gmail Reconnect Needed</title></head>
+        <body style="font-family: system-ui; padding: 32px; max-width: 720px;">
+          <h1>Gmail reconnect needed</h1>
+          <p>Google did not return a new long-term Gmail token. Return to the dashboard and click <strong>Connect Gmail</strong> again.</p>
+        </body>
+      </html>
+    `);
+    return;
+  }
+
   await db.collection("gmailAccounts").doc(email).set(
     {
       email,
       refreshToken,
-      tokenScope: tokens.scope || "",
+      tokenScope,
+      connectionError: "",
       connectedAt: now(),
       updatedAt: now()
     },
@@ -258,6 +317,11 @@ app.get("/auth/google/callback", async (req, res) => {
   `);
 });
 
+function hasGmailReadScope(scope: unknown) {
+  const scopes = String(scope || "").split(/\s+/);
+  return scopes.includes("https://www.googleapis.com/auth/gmail.readonly") || scopes.includes("https://mail.google.com/");
+}
+
 app.get("/gmail/accounts", requireApiKey, async (_req, res) => {
   await restoreLocalGmailAccountsIfEmpty();
   const accounts = await db.collection("gmailAccounts").get();
@@ -272,6 +336,7 @@ app.get("/gmail/accounts", requireApiKey, async (_req, res) => {
         lastGmailSyncAt: data.lastGmailSyncAt || "",
         lastGmailSyncProcessed: data.lastGmailSyncProcessed || 0,
         lastGmailSyncUpserted: data.lastGmailSyncUpserted || 0,
+        lastGmailSyncError: data.lastGmailSyncError || data.connectionError || "",
         hasRefreshToken: Boolean(data.refreshToken)
       };
     })
@@ -318,53 +383,63 @@ async function runGmailSync(options: GmailSyncOptions = {}): Promise<GmailSyncRe
     if (!account.refreshToken) continue;
     let accountProcessed = 0;
     let accountUpserted = 0;
+    let accountError = "";
 
     const client = oauthClient();
     client.setCredentials({ refresh_token: account.refreshToken });
     const gmail = google.gmail({ version: "v1", auth: client });
     let pageToken: string | undefined;
 
-    while (accountProcessed < maxResults) {
-      const remaining = maxResults - accountProcessed;
-      const list = await gmail.users.messages.list({
-        userId: "me",
-        maxResults: Math.min(remaining, 500),
-        pageToken,
-        q: `("Amazon Relay" OR from:(relay-noreply@amazon.com) OR from:(no-reply@relay.amazon.com) OR from:(amazonrelay@amazon.com) OR "load has been booked" OR "Load ID" OR "Trip ID") newer_than:${lookbackDays}d`
-      });
+    try {
+      while (accountProcessed < maxResults) {
+        const remaining = maxResults - accountProcessed;
+        const list = await gmail.users.messages.list({
+          userId: "me",
+          maxResults: Math.min(remaining, 500),
+          pageToken,
+          q: `("Amazon Relay" OR from:(relay-noreply@amazon.com) OR from:(no-reply@relay.amazon.com) OR from:(amazonrelay@amazon.com) OR "load has been booked" OR "Load ID" OR "Trip ID") newer_than:${lookbackDays}d`
+        });
 
-      for (const messageRef of list.data.messages || []) {
-        if (!messageRef.id) continue;
-        processed += 1;
-        accountProcessed += 1;
-        try {
-          const message = await gmail.users.messages.get({
-            userId: "me",
-            id: messageRef.id,
-            format: "full"
-          });
+        for (const messageRef of list.data.messages || []) {
+          if (!messageRef.id) continue;
+          processed += 1;
+          accountProcessed += 1;
+          try {
+            const message = await gmail.users.messages.get({
+              userId: "me",
+              id: messageRef.id,
+              format: "full"
+            });
 
-          const details = extractMessageDetails(message.data);
-          if (!isLikelyRelayBookingEmail(details)) {
+            const details = extractMessageDetails(message.data);
+            if (!isLikelyRelayBookingEmail(details)) {
+              skipped += 1;
+              continue;
+            }
+            const parsed = parseRelayBookingEmail(details, account.email || accountDoc.id);
+            if (!parsed) {
+              skipped += 1;
+              continue;
+            }
+            const didUpsert = await upsertGmailLoad(parsed);
+            if (didUpsert) {
+              upserted += 1;
+              accountUpserted += 1;
+            } else {
+              skipped += 1;
+            }
+          } catch (error) {
             skipped += 1;
-            continue;
+            errors.push(`${messageRef.id}: ${gmailErrorMessage(error)}`);
           }
-          const parsed = parseRelayBookingEmail(details, account.email || accountDoc.id);
-          if (!parsed) {
-            skipped += 1;
-            continue;
-          }
-          await upsertGmailLoad(parsed);
-          upserted += 1;
-          accountUpserted += 1;
-        } catch (error) {
-          skipped += 1;
-          errors.push(`${messageRef.id}: ${String((error as Error).message || error)}`);
         }
-      }
 
-      pageToken = list.data.nextPageToken || undefined;
-      if (!pageToken || (list.data.messages || []).length === 0) break;
+        pageToken = list.data.nextPageToken || undefined;
+        if (!pageToken || (list.data.messages || []).length === 0) break;
+      }
+    } catch (error) {
+      accountError = gmailErrorMessage(error);
+      errors.push(`${account.email || accountDoc.id}: ${accountError}`);
     }
 
     await accountDoc.ref.set(
@@ -372,6 +447,7 @@ async function runGmailSync(options: GmailSyncOptions = {}): Promise<GmailSyncRe
         lastGmailSyncAt: now(),
         lastGmailSyncProcessed: accountProcessed,
         lastGmailSyncUpserted: accountUpserted,
+        lastGmailSyncError: accountError,
         lastGmailSyncLookbackDays: lookbackDays,
         lastGmailSyncMaxResults: maxResults,
         updatedAt: now()
@@ -405,6 +481,44 @@ async function recordGmailSyncRun(options: GmailSyncOptions, result: GmailSyncRe
   });
 }
 
+function gmailErrorMessage(error: unknown) {
+  const anyError = error as {
+    message?: unknown;
+    response?: {
+      data?: {
+        error?: unknown;
+        error_description?: unknown;
+        errorDetails?: unknown;
+      };
+    };
+    code?: number;
+  };
+  const responseError = anyError.response?.data?.error;
+  const nestedErrorMessage =
+    responseError && typeof responseError === "object" && "message" in responseError
+      ? String((responseError as { message?: unknown }).message || "")
+      : "";
+  const nestedErrorStatus =
+    responseError && typeof responseError === "object" && "status" in responseError
+      ? String((responseError as { status?: unknown }).status || "")
+      : "";
+  const message = String(
+    anyError.response?.data?.error_description ||
+      nestedErrorMessage ||
+      nestedErrorStatus ||
+      (typeof responseError === "string" ? responseError : "") ||
+      anyError.message ||
+      String(error)
+  );
+  if (/insufficient/i.test(message)) {
+    return "Gmail permission is missing. Click Connect Gmail again and approve Gmail read access.";
+  }
+  if (/invalid_grant/i.test(message)) {
+    return "Gmail connection expired. Click Connect Gmail again.";
+  }
+  return message;
+}
+
 app.post("/gmail/clear-imports", requireApiKey, async (_req, res) => {
   const snapshot = await db.collection("loads").where("source", "==", "gmail").get();
   let deleted = 0;
@@ -432,8 +546,33 @@ app.get("/loads", requireApiKey, async (req, res) => {
 
   res.json({
     ok: true,
-    loads: snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }))
+    loads: snapshot.docs
+      .map((doc) => ({ id: doc.id, ...doc.data() }))
+      .filter((load: FirebaseFirestore.DocumentData & { id: string }) => !load.deletedAt)
   });
+});
+
+app.get("/settings", requireApiKey, async (_req, res) => {
+  const snapshot = await db.collection("configuration").doc("dashboard").get();
+  const data = snapshot.data() || {};
+  res.json({
+    ok: true,
+    settings: {
+      fuelCalculatorEnabled: Boolean(data.fuelCalculatorEnabled),
+      fuelMpg: boundedDecimal(data.fuelMpg, 1, 30, 8),
+      fuelPricePerGallon: boundedDecimal(data.fuelPricePerGallon, 0, 25, 6.5)
+    }
+  });
+});
+
+app.patch("/settings", requireApiKey, async (req, res) => {
+  const settings = {
+    fuelCalculatorEnabled: Boolean(req.body?.fuelCalculatorEnabled),
+    fuelMpg: boundedDecimal(req.body?.fuelMpg, 1, 30, 8),
+    fuelPricePerGallon: boundedDecimal(req.body?.fuelPricePerGallon, 0, 25, 6.5)
+  };
+  await db.collection("configuration").doc("dashboard").set({ ...settings, updatedAt: now() }, { merge: true });
+  res.json({ ok: true, settings });
 });
 
 app.patch("/loads/:id", requireApiKey, async (req, res) => {
@@ -497,14 +636,13 @@ app.delete("/loads", requireApiKey, async (req, res) => {
   }
 
   let deleted = 0;
-  for (let index = 0; index < ids.length; index += 450) {
-    const batch = db.batch();
-    const chunk = ids.slice(index, index + 450);
-    chunk.forEach((id) => {
-      batch.delete(db.collection("loads").doc(id));
-      deleted += 1;
-    });
-    await batch.commit();
+  for (const id of ids) {
+    const ref = db.collection("loads").doc(id);
+    const snapshot = await ref.get();
+    const data = snapshot.data() || {};
+    await tombstoneLoad(id, data);
+    await ref.delete();
+    deleted += 1;
   }
 
   res.json({ ok: true, requested: ids.length, deleted });
@@ -575,6 +713,10 @@ app.post("/payments/sync", requireApiKey, async (req, res) => {
     upserted += 1;
 
     for (const relatedId of relatedIds) {
+      if (await isDeletedLoad(relatedId)) {
+        continue;
+      }
+
       const match = await findExistingLoadByIds(relatedId, relatedId);
       if (!match) {
         unmatchedSettlementIds.push(relatedId);
@@ -646,9 +788,15 @@ app.post("/trips/sync", requireApiKey, async (req, res) => {
 
   let matched = 0;
   let tripOnly = 0;
+  let suppressed = 0;
 
   for (const trip of trips) {
     if (!trip.tripId) continue;
+    if (await isDeletedLoad(trip.tripId, trip.parentTourId || "")) {
+      suppressed += 1;
+      continue;
+    }
+
     const match = await findMatchingLoad(trip);
     if (match) {
       await match.ref.set(
@@ -663,6 +811,7 @@ app.post("/trips/sync", requireApiKey, async (req, res) => {
           currentTripStatus: mergedTripStatus(match.data.currentTripStatus, trip.status),
           origin: trip.pickup || match.data.origin || "",
           destination: trip.dropoff || match.data.destination || "",
+          totalMiles: parsePositiveNumber(trip.miles) ?? match.data.totalMiles ?? null,
           payout: parseMoney(trip.payout) ?? match.data.payout ?? null,
           gmailPayout: match.data.gmailPayout ?? match.data.originalBookedPayout ?? null,
           tripStartDate: trip.startTime || "",
@@ -689,6 +838,7 @@ app.post("/trips/sync", requireApiKey, async (req, res) => {
           status: trip.status || "seen_in_trips",
           origin: trip.pickup || "",
           destination: trip.dropoff || "",
+          totalMiles: parsePositiveNumber(trip.miles),
           payout: parseMoney(trip.payout),
           tripStartDate: trip.startTime || "",
           tripEndDate: trip.endTime || "",
@@ -714,12 +864,15 @@ app.post("/trips/sync", requireApiKey, async (req, res) => {
     scanId: scanRef.id,
     received: trips.length,
     matched,
-    tripOnly
+    tripOnly,
+    suppressed
   });
 });
 
 async function findMatchingLoad(trip: RelayTrip) {
   const tripId = trip.tripId || "";
+  if (await isDeletedLoad(tripId, trip.parentTourId || "")) return null;
+
   const existing = await findExistingLoadByIds(tripId, tripId);
   if (existing) return existing;
 
@@ -744,6 +897,8 @@ async function findMatchingLoad(trip: RelayTrip) {
 }
 
 async function findExistingLoadByIds(tripId: string, loadId: string) {
+  if (await isDeletedLoad(tripId, loadId)) return null;
+
   for (const normalizedTripId of tripIdVariants(tripId)) {
     const byTrip = await db.collection("loads").where("amazonTripId", "==", normalizedTripId).limit(1).get();
     if (!byTrip.empty) {
@@ -768,6 +923,75 @@ function tripIdVariants(value: string) {
   if (!id) return [];
   const withoutPrefix = id.replace(/^T-/, "");
   return [...new Set([id, withoutPrefix, `T-${withoutPrefix}`])];
+}
+
+function deletedLoadKeys(...values: unknown[]) {
+  const keys = new Set<string>();
+  for (const value of values) {
+    const raw = String(value || "").trim();
+    if (!raw) continue;
+    const upper = raw.toUpperCase();
+    const withoutDocPrefix = upper.replace(/^TRIP_/, "");
+    const withoutTripPrefix = withoutDocPrefix.replace(/^T-/, "");
+    [
+      raw,
+      upper,
+      withoutDocPrefix,
+      withoutTripPrefix,
+      `T-${withoutTripPrefix}`,
+      `TRIP_${withoutTripPrefix}`,
+      `TRIP_T-${withoutTripPrefix}`
+    ].forEach((key) => {
+      const clean = String(key || "").trim();
+      if (clean) keys.add(clean);
+    });
+  }
+  return [...keys];
+}
+
+function deletedLoadDocId(key: string) {
+  return encodeURIComponent(key).replace(/\./g, "%2E");
+}
+
+async function isDeletedLoad(...values: unknown[]) {
+  const keys = deletedLoadKeys(...values);
+  if (keys.length === 0) return false;
+  const checks = await Promise.all(
+    keys.map((key) => db.collection("deletedLoads").doc(deletedLoadDocId(key)).get())
+  );
+  return checks.some((snapshot) => snapshot.exists);
+}
+
+async function tombstoneLoad(id: string, data: FirebaseFirestore.DocumentData) {
+  const keys = deletedLoadKeys(
+    id,
+    data.amazonTripId,
+    data.amazonLoadId,
+    data.parentTourId,
+    data.emailId
+  );
+  if (keys.length === 0) return;
+
+  for (let index = 0; index < keys.length; index += 450) {
+    const batch = db.batch();
+    keys.slice(index, index + 450).forEach((key) => {
+      batch.set(
+        db.collection("deletedLoads").doc(deletedLoadDocId(key)),
+        {
+          key,
+          originalLoadDocId: id,
+          amazonTripId: data.amazonTripId || "",
+          amazonLoadId: data.amazonLoadId || "",
+          parentTourId: data.parentTourId || "",
+          shortCode: data.shortCode || "",
+          deletedAt: now(),
+          updatedAt: now()
+        },
+        { merge: true }
+      );
+    });
+    await batch.commit();
+  }
 }
 
 function sourceHas(source: unknown, value: string) {
@@ -796,6 +1020,10 @@ function mergeSource(source: unknown, value: string) {
 }
 
 async function upsertGmailLoad(load: GmailLoad) {
+  if (await isDeletedLoad(load.amazonTripId || "", load.amazonLoadId || "", load.emailId || "")) {
+    return false;
+  }
+
   const existing = await findExistingLoadByIds(load.amazonTripId || "", load.amazonLoadId || "");
   const existingData = existing?.data || {};
   const hasTripsData = sourceHas(existingData.source, "trips") || Boolean(existingData.lastSeenInTripsAt);
@@ -813,6 +1041,7 @@ async function upsertGmailLoad(load: GmailLoad) {
     shortCode: load.shortCode || existingData.shortCode || "",
     origin: hasTripsData ? existingData.origin || load.origin || "" : load.origin || existingData.origin || "",
     destination: hasTripsData ? existingData.destination || load.destination || "" : load.destination || existingData.destination || "",
+    totalMiles: existingData.totalMiles ?? load.totalMiles ?? null,
     payout: existingData.payout ?? load.payout ?? null,
     gmailPayout: existingData.gmailPayout ?? existingData.originalBookedPayout ?? load.payout ?? null,
     originalBookedPayout: existingData.originalBookedPayout ?? existingData.gmailPayout ?? load.payout ?? null,
@@ -830,6 +1059,7 @@ async function upsertGmailLoad(load: GmailLoad) {
 
   if (!existing) update.createdAt = now();
   await ref.set(update, { merge: true });
+  return true;
 }
 
 function parseRelayBookingEmail(message: GmailMessageDetails, gmailAccount: string): GmailLoad | null {
@@ -845,6 +1075,7 @@ function parseRelayBookingEmail(message: GmailMessageDetails, gmailAccount: stri
   const route = findRoute(rawEmailText);
   const shortCode = rawEmailText.match(/#([a-z0-9]{3,10})/i)?.[1] || "";
   const pickupDate = findPickupDate(rawEmailText);
+  const totalMiles = findTotalMiles(rawEmailText);
 
   if (!isUsableBookingLoad({ tripId, loadId, route, payout, rawEmailText })) {
     return null;
@@ -862,6 +1093,7 @@ function parseRelayBookingEmail(message: GmailMessageDetails, gmailAccount: stri
     shortCode: shortCode || "",
     origin: route.origin,
     destination: route.destination,
+    totalMiles,
     payout: payout ?? null,
     gmailPayout: payout ?? null,
     pickupDate,
@@ -910,6 +1142,12 @@ function parseMoney(value: unknown): number | null {
   if (value === null || value === undefined || value === "") return null;
   const number = Number(String(value).replace(/[$,]/g, ""));
   return Number.isFinite(number) ? number : null;
+}
+
+function parsePositiveNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(String(value).replace(/,/g, ""));
+  return Number.isFinite(number) && number > 0 ? number : null;
 }
 
 function normalizeDriverName(value: unknown) {
@@ -979,6 +1217,11 @@ function findPickupDate(text: string) {
   if (monthDay) return `${titleMonth(monthDay[1])} ${Number(monthDay[2])}`;
 
   return "";
+}
+
+function findTotalMiles(text: string) {
+  const match = text.match(/\b([\d,]+(?:\.\d+)?)\s*(?:mi|miles)\b/i);
+  return parsePositiveNumber(match?.[1]);
 }
 
 function titleMonth(value: string) {

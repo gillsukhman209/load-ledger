@@ -4,6 +4,12 @@ const state = {
   apiKey: localStorage.getItem("relayLedgerApiKey") || "",
   gmailLookbackDays: Number(localStorage.getItem("relayLedgerGmailLookbackDays") || 365),
   gmailMaxResults: Number(localStorage.getItem("relayLedgerGmailMaxResults") || 2000),
+  theme: localStorage.getItem("relayLedgerTheme") || "light",
+  ledgerSettings: {
+    fuelCalculatorEnabled: false,
+    fuelMpg: 8,
+    fuelPricePerGallon: 6.5
+  },
   loads: [],
   settlements: [],
   scans: [],
@@ -31,6 +37,7 @@ const elements = {
   syncGmailButton: document.querySelector("#syncGmailButton"),
   clearGmailButton: document.querySelector("#clearGmailButton"),
   refreshButton: document.querySelector("#refreshButton"),
+  themeToggleButton: document.querySelector("#themeToggleButton"),
   settingsButton: document.querySelector("#settingsButton"),
   settingsPanel: document.querySelector("#settingsPanel"),
   filtersButton: document.querySelector("#filtersButton"),
@@ -39,10 +46,18 @@ const elements = {
   apiKeyInput: document.querySelector("#apiKeyInput"),
   gmailLookbackDaysInput: document.querySelector("#gmailLookbackDaysInput"),
   gmailMaxResultsInput: document.querySelector("#gmailMaxResultsInput"),
+  fuelCalculatorEnabledInput: document.querySelector("#fuelCalculatorEnabledInput"),
+  fuelMpgInput: document.querySelector("#fuelMpgInput"),
+  fuelPriceInput: document.querySelector("#fuelPriceInput"),
+  fuelCoverageText: document.querySelector("#fuelCoverageText"),
   saveSettingsButton: document.querySelector("#saveSettingsButton"),
   totalLoads: document.querySelector("#totalLoads"),
+  totalPayoutLabel: document.querySelector("#totalPayoutLabel"),
   totalPayout: document.querySelector("#totalPayout"),
+  totalPayoutCaption: document.querySelector("#totalPayoutCaption"),
+  unpaidPayoutLabel: document.querySelector("#unpaidPayoutLabel"),
   unpaidPayout: document.querySelector("#unpaidPayout"),
+  unpaidPayoutCaption: document.querySelector("#unpaidPayoutCaption"),
   needsReview: document.querySelector("#needsReview"),
   gmailMissing: document.querySelector("#gmailMissing"),
   driverInsights: document.querySelector("#driverInsights"),
@@ -56,6 +71,7 @@ const elements = {
   monthFilter: document.querySelector("#monthFilter"),
   sortField: document.querySelector("#sortField"),
   sortDirection: document.querySelector("#sortDirection"),
+  payoutSortHeader: document.querySelector("#payoutSortHeader"),
   bulkActions: document.querySelector("#bulkActions"),
   selectedCount: document.querySelector("#selectedCount"),
   clearSelectionButton: document.querySelector("#clearSelectionButton"),
@@ -71,10 +87,17 @@ elements.backendUrlInput.value = state.backendUrl;
 elements.apiKeyInput.value = state.apiKey;
 elements.gmailLookbackDaysInput.value = state.gmailLookbackDays;
 elements.gmailMaxResultsInput.value = state.gmailMaxResults;
+applyLedgerSettingsToInputs();
 elements.sortField.value = state.sort.field;
 elements.sortDirection.value = state.sort.direction;
+applyTheme();
 
 elements.refreshButton.addEventListener("click", loadDashboard);
+elements.themeToggleButton.addEventListener("click", () => {
+  state.theme = state.theme === "dark" ? "light" : "dark";
+  localStorage.setItem("relayLedgerTheme", state.theme);
+  applyTheme();
+});
 elements.clearSelectionButton.addEventListener("click", () => {
   state.selectedLoadIds.clear();
   render();
@@ -111,18 +134,33 @@ elements.filtersButton.addEventListener("click", () => {
   elements.filtersButton.textContent = isHidden ? "Show filters" : "Hide filters";
   elements.filtersButton.setAttribute("aria-expanded", String(!isHidden));
 });
-elements.saveSettingsButton.addEventListener("click", () => {
+elements.saveSettingsButton.addEventListener("click", async () => {
   state.backendUrl = elements.backendUrlInput.value.trim() || DEFAULT_BACKEND_URL;
   state.apiKey = elements.apiKeyInput.value.trim();
   state.gmailLookbackDays = clampNumber(elements.gmailLookbackDaysInput.value, 1, 3650, 365);
   state.gmailMaxResults = clampNumber(elements.gmailMaxResultsInput.value, 50, 5000, 2000);
+  state.ledgerSettings = {
+    fuelCalculatorEnabled: elements.fuelCalculatorEnabledInput.checked,
+    fuelMpg: boundedDecimal(elements.fuelMpgInput.value, 1, 30, 8),
+    fuelPricePerGallon: boundedDecimal(elements.fuelPriceInput.value, 0, 25, 6.5)
+  };
   localStorage.setItem("relayLedgerBackendUrl", state.backendUrl);
   localStorage.setItem("relayLedgerApiKey", state.apiKey);
   localStorage.setItem("relayLedgerGmailLookbackDays", String(state.gmailLookbackDays));
   localStorage.setItem("relayLedgerGmailMaxResults", String(state.gmailMaxResults));
-  elements.settingsPanel.hidden = true;
-  elements.settingsButton.setAttribute("aria-expanded", "false");
-  loadDashboard();
+  elements.saveSettingsButton.disabled = true;
+  setStatus("Saving settings...");
+  try {
+    const result = await apiPatch("/settings", state.ledgerSettings);
+    applyLedgerSettings(result.settings);
+    elements.settingsPanel.hidden = true;
+    elements.settingsButton.setAttribute("aria-expanded", "false");
+    await loadDashboard();
+  } catch (error) {
+    setStatus(`Could not save settings: ${error.message}`);
+  } finally {
+    elements.saveSettingsButton.disabled = false;
+  }
 });
 
 elements.searchInput.addEventListener("input", (event) => {
@@ -178,19 +216,43 @@ document.addEventListener("click", closeActionMenus);
 
 loadDashboard();
 
+function applyTheme() {
+  document.body.dataset.theme = state.theme;
+  const isDark = state.theme === "dark";
+  elements.themeToggleButton.textContent = isDark ? "Light" : "Dark";
+  elements.themeToggleButton.setAttribute("aria-pressed", String(isDark));
+}
+
+function applyLedgerSettings(settings = {}) {
+  state.ledgerSettings = {
+    fuelCalculatorEnabled: Boolean(settings.fuelCalculatorEnabled),
+    fuelMpg: boundedDecimal(settings.fuelMpg, 1, 30, 8),
+    fuelPricePerGallon: boundedDecimal(settings.fuelPricePerGallon, 0, 25, 6.5)
+  };
+  applyLedgerSettingsToInputs();
+}
+
+function applyLedgerSettingsToInputs() {
+  elements.fuelCalculatorEnabledInput.checked = state.ledgerSettings.fuelCalculatorEnabled;
+  elements.fuelMpgInput.value = String(state.ledgerSettings.fuelMpg);
+  elements.fuelPriceInput.value = state.ledgerSettings.fuelPricePerGallon.toFixed(2);
+}
+
 async function loadDashboard() {
   setStatus("Loading ledger...");
   try {
-    const [loads, scans, accounts, settlements] = await Promise.all([
+    const [loads, scans, accounts, settlements, settings] = await Promise.all([
       apiGet("/loads?limit=2500"),
       apiGet("/tripScans?limit=10"),
       apiGet("/gmail/accounts"),
-      apiGet("/settlements?limit=500")
+      apiGet("/settlements?limit=500"),
+      apiGet("/settings")
     ]);
     state.loads = Array.isArray(loads.loads) ? loads.loads : [];
     state.settlements = Array.isArray(settlements.settlements) ? settlements.settlements : [];
     state.scans = Array.isArray(scans.scans) ? scans.scans : [];
     state.accounts = Array.isArray(accounts.accounts) ? accounts.accounts : [];
+    applyLedgerSettings(settings.settings);
     populateFilterOptions();
     render();
     setStatus(`Loaded ${state.loads.length} loads.`);
@@ -234,7 +296,8 @@ async function syncGmail() {
       await loadDashboard();
       return;
     }
-    setStatus(`Gmail sync complete: ${result.upserted || 0} loads updated, ${result.skipped || 0} skipped from ${result.processed || 0} emails.`);
+    const errorText = Array.isArray(result.errors) && result.errors.length ? ` Error: ${result.errors[0]}` : "";
+    setStatus(`Gmail sync complete: ${result.upserted || 0} loads updated, ${result.skipped || 0} skipped from ${result.processed || 0} emails.${errorText}`);
     await loadDashboard();
   } catch (error) {
     setStatus(`Gmail sync failed: ${error.message}`);
@@ -363,6 +426,7 @@ function render() {
   renderInsights(filtered);
   renderTable(filtered);
   renderBulkActions();
+  renderFuelCoverage();
 }
 
 function renderQuickFilters() {
@@ -547,15 +611,39 @@ function isUsableCity(value) {
 }
 
 function renderSummary(loads) {
+  const fuelEnabled = state.ledgerSettings.fuelCalculatorEnabled;
+  const grossPayout = sum(loads.map((load) => grossLedgerPayout(load)));
+  const fuelCost = sum(loads.map((load) => estimatedFuelCost(load)));
   const totalPayout = sum(loads.map((load) => ledgerPayout(load)));
-  const unpaidPayout = sum(loads.filter((load) => !isInvoicePaid(load)).map((load) => ledgerPayout(load)));
+  const unpaidLoads = loads.filter((load) => !isInvoicePaid(load));
+  const unpaidPayout = sum(unpaidLoads.map((load) => ledgerPayout(load)));
+  const unpaidGross = sum(unpaidLoads.map((load) => grossLedgerPayout(load)));
+  const unpaidFuel = sum(unpaidLoads.map((load) => estimatedFuelCost(load)));
   const reviewCount = loads.filter((load) => needsReview(load)).length;
   const gmailMissing = loads.filter((load) => sourceHas(load, "gmail") && !sourceHas(load, "trips") && load.missingFromTrips).length;
   elements.totalLoads.textContent = String(loads.length);
+  elements.totalPayoutLabel.textContent = fuelEnabled ? "Net payout" : "Total payout";
   elements.totalPayout.textContent = currency(totalPayout);
+  elements.totalPayoutCaption.textContent = fuelEnabled
+    ? `Gross ${currency(grossPayout)} · Fuel ${currency(fuelCost)}`
+    : "Gross booked value";
+  elements.unpaidPayoutLabel.textContent = fuelEnabled ? "Unpaid net payout" : "Unpaid payout";
   elements.unpaidPayout.textContent = currency(unpaidPayout);
+  elements.unpaidPayoutCaption.textContent = fuelEnabled
+    ? `Gross ${currency(unpaidGross)} · Fuel ${currency(unpaidFuel)}`
+    : "Needs payment match";
+  elements.payoutSortHeader.textContent = fuelEnabled ? "Net payout" : "Payout";
   elements.needsReview.textContent = String(reviewCount);
   elements.gmailMissing.textContent = String(gmailMissing);
+}
+
+function renderFuelCoverage() {
+  const loads = ledgerLoads();
+  const covered = loads.filter((load) => loadMiles(load) > 0).length;
+  const missing = loads.length - covered;
+  elements.fuelCoverageText.textContent = missing > 0
+    ? `Mileage found for ${covered} of ${loads.length} loads. ${missing} load${missing === 1 ? "" : "s"} will stay gross until Trips or Gmail sync provides mileage.`
+    : `Mileage found for all ${loads.length} ledger loads.`;
 }
 
 function renderInsights(loads) {
@@ -619,7 +707,7 @@ function weekHeaderRow(week) {
   const row = document.createElement("tr");
   row.className = "week-row";
   const cell = document.createElement("td");
-  cell.colSpan = 11;
+  cell.colSpan = 12;
   const weekIds = week.loads.map((load) => load.id).filter(Boolean);
   const allSelected = weekIds.length > 0 && weekIds.every((id) => state.selectedLoadIds.has(id));
   const partiallySelected = weekIds.some((id) => state.selectedLoadIds.has(id));
@@ -628,7 +716,7 @@ function weekHeaderRow(week) {
     ? `
       <span>Amazon ${currency(settlement.mainTotal)}</span>
       ${settlement.disputeTotal > 0 ? `<span>Disputes ${currency(settlement.disputeTotal)}</span>` : ""}
-      <span class="${settlementDiffClass(week.total, settlement.paidTotal)}">Diff ${currency(settlementDiffValue(week.total, settlement.paidTotal))}</span>
+      <span class="${settlementDiffClass(week.grossTotal, settlement.paidTotal)}">Diff ${currency(settlementDiffValue(week.grossTotal, settlement.paidTotal))}</span>
       <span>${settlement.status}</span>
     `
     : `<span>No Amazon payment row</span>`;
@@ -640,8 +728,9 @@ function weekHeaderRow(week) {
       </label>
       <strong>${week.label}</strong>
       <span>${week.loads.length} loads</span>
-      <span>Total ${currency(week.total)}</span>
-      <span>Unpaid ${currency(week.unpaid)}</span>
+      <span>${state.ledgerSettings.fuelCalculatorEnabled ? "Net" : "Total"} ${currency(week.total)}</span>
+      ${state.ledgerSettings.fuelCalculatorEnabled ? `<span>Fuel ${currency(week.fuelCost)}</span>` : ""}
+      <span>Unpaid${state.ledgerSettings.fuelCalculatorEnabled ? " net" : ""} ${currency(week.unpaid)}</span>
       <span>${week.reviewCount} review</span>
       ${settlementMarkup}
     </div>
@@ -676,6 +765,10 @@ function loadRow(load) {
     setCell(row, "destination", route.destination);
     setCell(row, "start", load.tripStartDate || load.pickupDate || "");
     setCell(row, "payout", currency(ledgerPayout(load)));
+    const payoutCell = row.querySelector('[data-field="payout"]');
+    if (state.ledgerSettings.fuelCalculatorEnabled) {
+      payoutCell.title = `${currency(grossLedgerPayout(load))} gross - ${currency(estimatedFuelCost(load))} fuel (${formatMiles(loadMiles(load))})`;
+    }
     const statusCell = row.querySelector('[data-field="status"]');
     statusCell.append(statusBadge(load));
     if (hasDispute(load) && !isCancelledLoad(load) && !isDisputePaid(load)) statusCell.append(disputeBadge(load));
@@ -788,7 +881,7 @@ async function deleteSelectedLoads() {
   const ids = [...state.selectedLoadIds];
   if (ids.length === 0) return;
 
-  const confirmed = window.confirm(`Delete ${ids.length} selected load${ids.length === 1 ? "" : "s"} from the ledger? This cannot be undone.`);
+  const confirmed = window.confirm(`Delete ${ids.length} selected load${ids.length === 1 ? "" : "s"} from the ledger? Deleted loads will stay hidden and will not come back on future syncs.`);
   if (!confirmed) return;
 
   elements.deleteSelectedButton.disabled = true;
@@ -815,12 +908,16 @@ function groupLoadsByWeek(loads) {
       ...week,
       loads: [],
       total: 0,
+      grossTotal: 0,
+      fuelCost: 0,
       unpaid: 0,
       reviewCount: 0
     };
 
     existing.loads.push(load);
     existing.total += ledgerPayout(load);
+    existing.grossTotal += grossLedgerPayout(load);
+    existing.fuelCost += estimatedFuelCost(load);
     if (!isInvoicePaid(load)) existing.unpaid += ledgerPayout(load);
     if (needsReview(load)) {
       existing.reviewCount += 1;
@@ -1226,7 +1323,7 @@ function moneyValue(value) {
   return Number.isFinite(number) ? number : 0;
 }
 
-function ledgerPayout(load) {
+function grossLedgerPayout(load) {
   if (isDisputePaid(load) && moneyValue(load.settlementAmount) > 0) return moneyValue(load.settlementAmount);
   if (isCancelledLoad(load)) return 175;
 
@@ -1235,6 +1332,40 @@ function ledgerPayout(load) {
     if (gmailPayout > 0) return gmailPayout;
   }
   return moneyValue(load.payout);
+}
+
+function ledgerPayout(load) {
+  const gross = grossLedgerPayout(load);
+  if (!state.ledgerSettings.fuelCalculatorEnabled) return gross;
+  return roundMoney(gross - estimatedFuelCost(load));
+}
+
+function estimatedFuelCost(load) {
+  if (!state.ledgerSettings.fuelCalculatorEnabled) return 0;
+  const miles = loadMiles(load);
+  if (miles <= 0) return 0;
+  return roundMoney((miles / state.ledgerSettings.fuelMpg) * state.ledgerSettings.fuelPricePerGallon);
+}
+
+function loadMiles(load) {
+  const stored = positiveNumber(load.totalMiles ?? load.miles ?? load.distanceMiles);
+  if (stored > 0) return stored;
+  const emailMatch = String(load.rawEmailText || "").match(/\b([\d,]+(?:\.\d+)?)\s*(?:mi|miles)\b/i);
+  return positiveNumber(emailMatch?.[1]);
+}
+
+function positiveNumber(value) {
+  const number = Number(String(value ?? "").replace(/,/g, ""));
+  return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+function roundMoney(value) {
+  return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+}
+
+function formatMiles(value) {
+  if (!(value > 0)) return "mileage unavailable";
+  return `${new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(value)} mi`;
 }
 
 function isCancelledLoad(load) {
@@ -1249,6 +1380,12 @@ function clampNumber(value, min, max, fallback) {
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
   return Math.min(Math.max(Math.round(number), min), max);
+}
+
+function boundedDecimal(value, min, max, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.round(Math.min(Math.max(number, min), max) * 100) / 100;
 }
 
 function sortableDate(value) {

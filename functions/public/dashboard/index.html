@@ -17,6 +17,7 @@
         <button id="syncGmailButton" type="button">Sync Gmail</button>
         <button id="clearGmailButton" type="button">Clear Gmail Imports</button>
         <button id="refreshButton" type="button">Refresh</button>
+        <button id="themeToggleButton" class="theme-toggle" type="button" aria-pressed="false">Dark</button>
         <button id="settingsButton" type="button" aria-expanded="false" aria-controls="settingsPanel">Settings</button>
       </div>
     </header>
@@ -39,6 +40,22 @@
           Max Gmail emails
           <input id="gmailMaxResultsInput" type="number" min="50" max="5000" step="50">
         </label>
+        <fieldset class="fuel-settings">
+          <legend>Fuel calculator</legend>
+          <label class="toggle-setting">
+            <input id="fuelCalculatorEnabledInput" type="checkbox">
+            <span>Show payout after estimated fuel cost</span>
+          </label>
+          <label>
+            Truck MPG
+            <input id="fuelMpgInput" type="number" min="1" max="30" step="0.1" inputmode="decimal">
+          </label>
+          <label>
+            Fuel price per gallon
+            <input id="fuelPriceInput" type="number" min="0" max="25" step="0.01" inputmode="decimal">
+          </label>
+          <small id="fuelCoverageText">Mileage availability will appear after the ledger loads.</small>
+        </fieldset>
         <button id="saveSettingsButton" type="button">Save</button>
       </section>
 
@@ -54,17 +71,17 @@
         <article class="metric-card metric-money">
           <div class="metric-icon">P</div>
           <div>
-            <span>Total payout</span>
+            <span id="totalPayoutLabel">Total payout</span>
             <strong id="totalPayout">$0.00</strong>
-            <small>Booked value</small>
+            <small id="totalPayoutCaption">Gross booked value</small>
           </div>
         </article>
         <article class="metric-card metric-unpaid">
           <div class="metric-icon">U</div>
           <div>
-            <span>Unpaid payout</span>
+            <span id="unpaidPayoutLabel">Unpaid payout</span>
             <strong id="unpaidPayout">$0.00</strong>
-            <small>Needs payment match</small>
+            <small id="unpaidPayoutCaption">Needs payment match</small>
           </div>
         </article>
         <article class="metric-card metric-review">
@@ -195,11 +212,12 @@
                 <th><button class="sort-header" data-sort="pickup" type="button">Pickup</button></th>
                 <th><button class="sort-header" data-sort="dropoff" type="button">Dropoff</button></th>
                 <th><button class="sort-header" data-sort="start" type="button">Start</button></th>
-                <th><button class="sort-header" data-sort="payout" type="button">Payout</button></th>
+                <th><button id="payoutSortHeader" class="sort-header" data-sort="payout" type="button">Payout</button></th>
                 <th><button class="sort-header" data-sort="status" type="button">Status</button></th>
                 <th><button class="sort-header" data-sort="source" type="button">Source</button></th>
                 <th><button class="sort-header" data-sort="invoice" type="button">Invoice</button></th>
-                <th>Actions</th>
+                <th>Edit</th>
+                <th>Notes</th>
               </tr>
             </thead>
             <tbody id="loadsBody"></tbody>
@@ -228,8 +246,7 @@
         <td data-field="invoice" data-label="Invoice">
           <span data-field="invoice-status"></span>
         </td>
-        <td data-field="actions" data-label="Actions">
-          <span class="note-preview" data-field="note-preview" hidden></span>
+        <td data-field="actions" data-label="Edit">
           <button class="kebab-button" data-action="toggle-actions" type="button" aria-label="Edit load">
             <span></span>
             <span></span>
@@ -250,6 +267,9 @@
             <button class="secondary-button" data-action="show-note" type="button">Add note</button>
             <input data-action="notes" type="text" placeholder="Add note" hidden>
           </div>
+        </td>
+        <td data-field="notes" data-label="Notes">
+          <span class="note-preview" data-field="note-preview" hidden></span>
         </td>
       </tr>
     </template>

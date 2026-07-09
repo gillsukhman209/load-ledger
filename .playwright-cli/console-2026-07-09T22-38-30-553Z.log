@@ -1,8 +1,0 @@
-[     380ms] [VERBOSE] [DOM] Password field is not contained in a form: (More info: https://goo.gl/9p2vKq) %o @ https://us-central1-relayloadtracker.cloudfunctions.net/api/dashboard/:0
-[     448ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://us-central1-relayloadtracker.cloudfunctions.net/favicon.ico:0
-[     456ms] [ERROR] Failed to load resource: the server responded with a status of 401 () @ https://us-central1-relayloadtracker.cloudfunctions.net/api/loads?limit=2500:0
-[     461ms] [ERROR] Failed to load resource: the server responded with a status of 401 () @ https://us-central1-relayloadtracker.cloudfunctions.net/api/tripScans?limit=10:0
-[     463ms] [ERROR] Failed to load resource: the server responded with a status of 401 () @ https://us-central1-relayloadtracker.cloudfunctions.net/api/settlements?limit=500:0
-[     468ms] [ERROR] Failed to load resource: the server responded with a status of 401 () @ https://us-central1-relayloadtracker.cloudfunctions.net/api/settings:0
-[     468ms] [ERROR] Failed to load resource: the server responded with a status of 401 () @ https://us-central1-relayloadtracker.cloudfunctions.net/api/gmail/accounts:0
-[   16480ms] [VERBOSE] [DOM] Password field is not contained in a form: (More info: https://goo.gl/9p2vKq) @ https://us-central1-relayloadtracker.cloudfunctions.net/api/dashboard/:0

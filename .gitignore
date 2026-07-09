@@ -14,3 +14,4 @@ functions/.gmail-accounts.local.json
 # Local editor state
 .idea/
 .vscode/
+.playwright-cli/

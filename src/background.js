@@ -4,7 +4,6 @@ const DEFAULT_BACKEND_BASE_URL = "https://us-central1-relayloadtracker.cloudfunc
 chrome.runtime.onInstalled.addListener(async () => {
   const defaults = {
     backendBaseUrl: DEFAULT_BACKEND_BASE_URL,
-    apiKey: "",
     autoSync: true,
     syncIntervalMinutes: 15,
     dateRangeDays: 60
@@ -17,6 +16,7 @@ chrome.runtime.onInstalled.addListener(async () => {
     await chrome.storage.sync.set(missing);
     console.info(`${LOG_PREFIX} default settings initialized`, Object.keys(missing));
   }
+  await chrome.storage.sync.remove("apiKey");
 });
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
@@ -34,14 +34,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type !== "RELAY_LEDGER_POST_SYNC" && message?.type !== "RELAY_LEDGER_POST_PAYMENTS_SYNC") return false;
 
   const path = message.type === "RELAY_LEDGER_POST_PAYMENTS_SYNC" ? "/payments/sync" : "/trips/sync";
-  postSync(message.backendBaseUrl, message.apiKey, message.payload, path)
+  postSync(message.backendBaseUrl, message.payload, path)
     .then((result) => sendResponse(result))
     .catch((error) => sendResponse({ ok: false, error: String(error.message || error) }));
 
   return true;
 });
 
-async function postSync(backendBaseUrl, apiKey, payload, path) {
+async function postSync(backendBaseUrl, payload, path) {
   if (!backendBaseUrl) return { ok: false, error: "Missing Firebase backend URL" };
   const syncUrl = `${backendBaseUrl.replace(/\/+$/, "")}${path}`;
 
@@ -55,8 +55,7 @@ async function postSync(backendBaseUrl, apiKey, payload, path) {
   const response = await fetch(syncUrl, {
     method: "POST",
     headers: {
-      "Content-Type": "application/json",
-      ...(apiKey ? { "x-ledger-api-key": apiKey } : {})
+      "Content-Type": "application/json"
     },
     body: JSON.stringify(payload)
   });

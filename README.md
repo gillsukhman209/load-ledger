@@ -81,9 +81,7 @@ This version scraps the Google Sheets / Apps Script backend. The extension still
 10. Run Gmail sync after connecting:
 
    ```bash
-   curl -X POST \
-     -H "x-ledger-api-key: YOUR_LEDGER_API_KEY" \
-     http://localhost:5001/relayloadtracker/us-central1/api/gmail/sync
+   curl -X POST http://localhost:5001/relayloadtracker/us-central1/api/gmail/sync
    ```
 
 ## Extension Setup
@@ -104,9 +102,8 @@ This version scraps the Google Sheets / Apps Script backend. The extension still
    http://localhost:5001/relayloadtracker/us-central1/api
    ```
 
-7. Set Backend API key to the same `LEDGER_API_KEY` from `functions/.env`.
-8. Save settings.
-9. Open Amazon Relay Trips and use the popup `Sync Now` button or wait for auto-sync.
+7. Save settings.
+8. Open Amazon Relay Trips and use the popup `Sync Now` button or wait for auto-sync.
 
 ## Dashboard
 
@@ -116,7 +113,7 @@ After the emulator is running, open:
 http://127.0.0.1:5001/relayloadtracker/us-central1/api/dashboard/
 ```
 
-Use the same backend URL and API key as the extension:
+Use the same backend URL as the extension. This single-user deployment does not require an API key:
 
 ```text
 Backend URL:

@@ -16,7 +16,13 @@ const gmailAccountBackupPath = path.join(__dirname, "../.gmail-accounts.local.js
 
 app.use(cors({ origin: true }));
 app.use(express.json({ limit: "2mb" }));
-app.use("/dashboard", express.static(path.join(__dirname, "../public/dashboard")));
+app.use("/dashboard", express.static(path.join(__dirname, "../public/dashboard"), {
+  etag: false,
+  lastModified: false,
+  setHeaders(response) {
+    response.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+  }
+}));
 
 type RelayTrip = {
   tripId?: string;
@@ -136,22 +142,6 @@ function boundedDecimal(value: unknown, min: number, max: number, fallback: numb
   const number = Number(value);
   if (!Number.isFinite(number)) return fallback;
   return Math.round(Math.min(Math.max(number, min), max) * 100) / 100;
-}
-
-function requireApiKey(req: express.Request, res: express.Response, next: express.NextFunction) {
-  const expected = getEnv("LEDGER_API_KEY");
-  if (!expected) {
-    next();
-    return;
-  }
-
-  const provided = String(req.header("x-ledger-api-key") || "");
-  if (provided !== expected) {
-    res.status(401).json({ ok: false, error: "Unauthorized" });
-    return;
-  }
-
-  next();
 }
 
 function oauthClient() {
@@ -322,7 +312,7 @@ function hasGmailReadScope(scope: unknown) {
   return scopes.includes("https://www.googleapis.com/auth/gmail.readonly") || scopes.includes("https://mail.google.com/");
 }
 
-app.get("/gmail/accounts", requireApiKey, async (_req, res) => {
+app.get("/gmail/accounts", async (_req, res) => {
   await restoreLocalGmailAccountsIfEmpty();
   const accounts = await db.collection("gmailAccounts").get();
   res.json({
@@ -343,7 +333,7 @@ app.get("/gmail/accounts", requireApiKey, async (_req, res) => {
   });
 });
 
-app.post("/gmail/sync", requireApiKey, async (req, res) => {
+app.post("/gmail/sync", async (req, res) => {
   const result = await runGmailSync({
     maxResults: Number(req.body?.maxResults || req.query.maxResults || 1000),
     lookbackDays: Number(req.body?.lookbackDays || req.query.lookbackDays || 365),
@@ -519,7 +509,7 @@ function gmailErrorMessage(error: unknown) {
   return message;
 }
 
-app.post("/gmail/clear-imports", requireApiKey, async (_req, res) => {
+app.post("/gmail/clear-imports", async (_req, res) => {
   const snapshot = await db.collection("loads").where("source", "==", "gmail").get();
   let deleted = 0;
 
@@ -536,7 +526,7 @@ app.post("/gmail/clear-imports", requireApiKey, async (_req, res) => {
   res.json({ ok: true, deleted });
 });
 
-app.get("/loads", requireApiKey, async (req, res) => {
+app.get("/loads", async (req, res) => {
   const limit = Math.min(Number(req.query.limit || 100), 5000);
   const snapshot = await db
     .collection("loads")
@@ -552,7 +542,7 @@ app.get("/loads", requireApiKey, async (req, res) => {
   });
 });
 
-app.get("/settings", requireApiKey, async (_req, res) => {
+app.get("/settings", async (_req, res) => {
   const snapshot = await db.collection("configuration").doc("dashboard").get();
   const data = snapshot.data() || {};
   res.json({
@@ -565,7 +555,7 @@ app.get("/settings", requireApiKey, async (_req, res) => {
   });
 });
 
-app.patch("/settings", requireApiKey, async (req, res) => {
+app.patch("/settings", async (req, res) => {
   const settings = {
     fuelCalculatorEnabled: Boolean(req.body?.fuelCalculatorEnabled),
     fuelMpg: boundedDecimal(req.body?.fuelMpg, 1, 30, 8),
@@ -575,7 +565,7 @@ app.patch("/settings", requireApiKey, async (req, res) => {
   res.json({ ok: true, settings });
 });
 
-app.patch("/loads/:id", requireApiKey, async (req, res) => {
+app.patch("/loads/:id", async (req, res) => {
   const id = String(req.params.id || "").trim();
   if (!id) {
     res.status(400).json({ ok: false, error: "Missing load ID" });
@@ -620,7 +610,7 @@ app.patch("/loads/:id", requireApiKey, async (req, res) => {
   res.json({ ok: true, id, updated: Object.keys(update) });
 });
 
-app.delete("/loads", requireApiKey, async (req, res) => {
+app.delete("/loads", async (req, res) => {
   const ids: string[] = Array.isArray(req.body?.ids)
     ? Array.from(new Set<string>(req.body.ids.map((id: unknown) => String(id || "").trim()).filter(Boolean)))
     : [];
@@ -648,7 +638,7 @@ app.delete("/loads", requireApiKey, async (req, res) => {
   res.json({ ok: true, requested: ids.length, deleted });
 });
 
-app.get("/tripScans", requireApiKey, async (req, res) => {
+app.get("/tripScans", async (req, res) => {
   const limit = Math.min(Number(req.query.limit || 25), 100);
   const snapshot = await db
     .collection("tripScans")
@@ -662,7 +652,7 @@ app.get("/tripScans", requireApiKey, async (req, res) => {
   });
 });
 
-app.get("/settlements", requireApiKey, async (req, res) => {
+app.get("/settlements", async (req, res) => {
   const limit = Math.min(Number(req.query.limit || 300), 1000);
   const snapshot = await db
     .collection("settlements")
@@ -676,7 +666,7 @@ app.get("/settlements", requireApiKey, async (req, res) => {
   });
 });
 
-app.post("/payments/sync", requireApiKey, async (req, res) => {
+app.post("/payments/sync", async (req, res) => {
   const settlements = Array.isArray(req.body.settlements) ? (req.body.settlements as RelaySettlement[]) : [];
   const scanRef = await db.collection("paymentScans").add({
     source: req.body.source || "extension",
@@ -774,7 +764,7 @@ app.post("/payments/sync", requireApiKey, async (req, res) => {
   });
 });
 
-app.post("/trips/sync", requireApiKey, async (req, res) => {
+app.post("/trips/sync", async (req, res) => {
   const trips = Array.isArray(req.body.trips) ? (req.body.trips as RelayTrip[]) : [];
   const scanRef = await db.collection("tripScans").add({
     source: req.body.source || "extension",

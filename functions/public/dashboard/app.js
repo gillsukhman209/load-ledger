@@ -1,10 +1,12 @@
 const DEFAULT_BACKEND_URL = defaultBackendUrl();
+const CANCELLED_LOAD_PAYOUT = 175;
+const ACCENT_OPTIONS = ["blue", "emerald", "violet", "amber", "rose"];
 const state = {
   backendUrl: localStorage.getItem("relayLedgerBackendUrl") || DEFAULT_BACKEND_URL,
-  apiKey: localStorage.getItem("relayLedgerApiKey") || "",
   gmailLookbackDays: Number(localStorage.getItem("relayLedgerGmailLookbackDays") || 365),
   gmailMaxResults: Number(localStorage.getItem("relayLedgerGmailMaxResults") || 2000),
   theme: localStorage.getItem("relayLedgerTheme") || "light",
+  accent: normalizeAccent(localStorage.getItem("relayLedgerAccent")),
   ledgerSettings: {
     fuelCalculatorEnabled: false,
     fuelMpg: 8,
@@ -15,7 +17,13 @@ const state = {
   scans: [],
   accounts: [],
   selectedLoadIds: new Set(),
+  showAllLoads: false,
   quickFilter: "all",
+  activePage: pageFromHash(),
+  driverView: {
+    driver: localStorage.getItem("relayLedgerDriverView") || "",
+    month: localStorage.getItem("relayLedgerDriverMonth") || previousCalendarMonthKey()
+  },
   filters: {
     id: "",
     search: "",
@@ -38,12 +46,13 @@ const elements = {
   clearGmailButton: document.querySelector("#clearGmailButton"),
   refreshButton: document.querySelector("#refreshButton"),
   themeToggleButton: document.querySelector("#themeToggleButton"),
+  accentInputs: [...document.querySelectorAll('input[name="accentColor"]')],
   settingsButton: document.querySelector("#settingsButton"),
+  settingsCloseButton: document.querySelector("#settingsCloseButton"),
   settingsPanel: document.querySelector("#settingsPanel"),
   filtersButton: document.querySelector("#filtersButton"),
   filtersPanel: document.querySelector("#filtersPanel"),
   backendUrlInput: document.querySelector("#backendUrlInput"),
-  apiKeyInput: document.querySelector("#apiKeyInput"),
   gmailLookbackDaysInput: document.querySelector("#gmailLookbackDaysInput"),
   gmailMaxResultsInput: document.querySelector("#gmailMaxResultsInput"),
   fuelCalculatorEnabledInput: document.querySelector("#fuelCalculatorEnabledInput"),
@@ -60,7 +69,43 @@ const elements = {
   unpaidPayoutCaption: document.querySelector("#unpaidPayoutCaption"),
   needsReview: document.querySelector("#needsReview"),
   gmailMissing: document.querySelector("#gmailMissing"),
+  gmailConnectionState: document.querySelector("#gmailConnectionState"),
+  gmailLastSync: document.querySelector("#gmailLastSync"),
+  greetingText: document.querySelector("#greetingText"),
+  loadsDonut: document.querySelector("#loadsDonut"),
+  donutTotal: document.querySelector("#donutTotal"),
+  chartCompleted: document.querySelector("#chartCompleted"),
+  chartUnpaid: document.querySelector("#chartUnpaid"),
+  chartReview: document.querySelector("#chartReview"),
+  chartCancelled: document.querySelector("#chartCancelled"),
+  chartOther: document.querySelector("#chartOther"),
   driverInsights: document.querySelector("#driverInsights"),
+  driverDetailSelect: document.querySelector("#driverDetailSelect"),
+  driverMonthSelect: document.querySelector("#driverMonthSelect"),
+  driverMonthEarningsLabel: document.querySelector("#driverMonthEarningsLabel"),
+  driverMonthEarnings: document.querySelector("#driverMonthEarnings"),
+  driverMonthComparison: document.querySelector("#driverMonthComparison"),
+  driverMonthLoadsLabel: document.querySelector("#driverMonthLoadsLabel"),
+  driverMonthLoads: document.querySelector("#driverMonthLoads"),
+  driverMonthLoadsCaption: document.querySelector("#driverMonthLoadsCaption"),
+  driverAveragePayout: document.querySelector("#driverAveragePayout"),
+  driverAverageCaption: document.querySelector("#driverAverageCaption"),
+  driverLifetimeEarnings: document.querySelector("#driverLifetimeEarnings"),
+  driverLifetimeLoads: document.querySelector("#driverLifetimeLoads"),
+  driverMonthlySubtitle: document.querySelector("#driverMonthlySubtitle"),
+  driverEarningsMode: document.querySelector("#driverEarningsMode"),
+  driverMonthlyBody: document.querySelector("#driverMonthlyBody"),
+  driverMonthlyEmpty: document.querySelector("#driverMonthlyEmpty"),
+  driverWorkspace: document.querySelector("#drivers"),
+  overviewContent: [...document.querySelectorAll(".overview-content")],
+  dashboardGrid: document.querySelector("#dashboardGrid"),
+  insightRail: document.querySelector("#insightRail"),
+  overviewNav: document.querySelector("#overviewNav"),
+  overviewBrandLink: document.querySelector("#overviewBrandLink"),
+  driversNav: document.querySelector("#driversNav"),
+  showAllLoadsNav: document.querySelector("#showAllLoadsNav"),
+  viewAllLoadsButton: document.querySelector("#viewAllLoadsButton"),
+  visibleLoadCount: document.querySelector("#visibleLoadCount"),
   quickIdSearchInput: document.querySelector("#quickIdSearchInput"),
   clearQuickIdSearchButton: document.querySelector("#clearQuickIdSearchButton"),
   searchInput: document.querySelector("#searchInput"),
@@ -77,6 +122,7 @@ const elements = {
   clearSelectionButton: document.querySelector("#clearSelectionButton"),
   deleteSelectedButton: document.querySelector("#deleteSelectedButton"),
   quickFilterButtons: [...document.querySelectorAll("[data-quick-filter]")],
+  quickFilterCounts: [...document.querySelectorAll("[data-count-for]")],
   sortHeaders: [...document.querySelectorAll("[data-sort]")],
   loadsBody: document.querySelector("#loadsBody"),
   emptyState: document.querySelector("#emptyState"),
@@ -84,19 +130,29 @@ const elements = {
 };
 
 elements.backendUrlInput.value = state.backendUrl;
-elements.apiKeyInput.value = state.apiKey;
+localStorage.removeItem("relayLedgerApiKey");
 elements.gmailLookbackDaysInput.value = state.gmailLookbackDays;
 elements.gmailMaxResultsInput.value = state.gmailMaxResults;
 applyLedgerSettingsToInputs();
 elements.sortField.value = state.sort.field;
 elements.sortDirection.value = state.sort.direction;
+setGreeting();
 applyTheme();
+applyAccent();
+setActivePage(state.activePage, false);
 
 elements.refreshButton.addEventListener("click", loadDashboard);
 elements.themeToggleButton.addEventListener("click", () => {
   state.theme = state.theme === "dark" ? "light" : "dark";
   localStorage.setItem("relayLedgerTheme", state.theme);
   applyTheme();
+});
+elements.accentInputs.forEach((input) => {
+  input.addEventListener("change", () => {
+    state.accent = normalizeAccent(input.value);
+    localStorage.setItem("relayLedgerAccent", state.accent);
+    applyAccent();
+  });
 });
 elements.clearSelectionButton.addEventListener("click", () => {
   state.selectedLoadIds.clear();
@@ -111,6 +167,24 @@ elements.clearQuickIdSearchButton.addEventListener("click", () => {
   state.filters.id = "";
   elements.quickIdSearchInput.value = "";
   render();
+});
+elements.viewAllLoadsButton.addEventListener("click", () => {
+  state.showAllLoads = true;
+  window.location.hash = "#loads";
+  setActivePage("loads");
+  render();
+  document.querySelector("#loads")?.scrollIntoView({ behavior: "smooth", block: "start" });
+});
+elements.showAllLoadsNav.addEventListener("click", () => {
+  setActivePage("loads");
+  state.showAllLoads = true;
+  render();
+});
+elements.overviewNav.addEventListener("click", () => setActivePage("overview"));
+elements.overviewBrandLink.addEventListener("click", () => setActivePage("overview"));
+elements.driversNav.addEventListener("click", () => setActivePage("drivers"));
+window.addEventListener("hashchange", () => {
+  setActivePage(pageFromHash());
 });
 elements.quickFilterButtons.forEach((button) => {
   button.addEventListener("click", () => {
@@ -128,15 +202,20 @@ elements.settingsButton.addEventListener("click", () => {
   elements.settingsPanel.hidden = isHidden;
   elements.settingsButton.setAttribute("aria-expanded", String(!isHidden));
 });
+elements.settingsCloseButton.addEventListener("click", () => {
+  elements.settingsPanel.hidden = true;
+  elements.settingsButton.setAttribute("aria-expanded", "false");
+  elements.settingsButton.focus();
+});
 elements.filtersButton.addEventListener("click", () => {
   const isHidden = !elements.filtersPanel.hidden;
   elements.filtersPanel.hidden = isHidden;
-  elements.filtersButton.textContent = isHidden ? "Show filters" : "Hide filters";
   elements.filtersButton.setAttribute("aria-expanded", String(!isHidden));
+  elements.filtersButton.setAttribute("aria-label", isHidden ? "Show filters" : "Hide filters");
+  elements.filtersButton.title = isHidden ? "Show filters" : "Hide filters";
 });
 elements.saveSettingsButton.addEventListener("click", async () => {
   state.backendUrl = elements.backendUrlInput.value.trim() || DEFAULT_BACKEND_URL;
-  state.apiKey = elements.apiKeyInput.value.trim();
   state.gmailLookbackDays = clampNumber(elements.gmailLookbackDaysInput.value, 1, 3650, 365);
   state.gmailMaxResults = clampNumber(elements.gmailMaxResultsInput.value, 50, 5000, 2000);
   state.ledgerSettings = {
@@ -145,7 +224,6 @@ elements.saveSettingsButton.addEventListener("click", async () => {
     fuelPricePerGallon: boundedDecimal(elements.fuelPriceInput.value, 0, 25, 6.5)
   };
   localStorage.setItem("relayLedgerBackendUrl", state.backendUrl);
-  localStorage.setItem("relayLedgerApiKey", state.apiKey);
   localStorage.setItem("relayLedgerGmailLookbackDays", String(state.gmailLookbackDays));
   localStorage.setItem("relayLedgerGmailMaxResults", String(state.gmailMaxResults));
   elements.saveSettingsButton.disabled = true;
@@ -187,6 +265,16 @@ elements.monthFilter.addEventListener("change", (event) => {
   state.filters.month = event.target.value;
   render();
 });
+elements.driverDetailSelect.addEventListener("change", (event) => {
+  state.driverView.driver = event.target.value;
+  localStorage.setItem("relayLedgerDriverView", state.driverView.driver);
+  renderDriverWorkspace(ledgerLoads());
+});
+elements.driverMonthSelect.addEventListener("change", (event) => {
+  state.driverView.month = event.target.value;
+  localStorage.setItem("relayLedgerDriverMonth", state.driverView.month);
+  renderDriverWorkspace(ledgerLoads());
+});
 elements.sortField.addEventListener("change", (event) => {
   state.sort.field = event.target.value;
   persistSort();
@@ -219,8 +307,52 @@ loadDashboard();
 function applyTheme() {
   document.body.dataset.theme = state.theme;
   const isDark = state.theme === "dark";
-  elements.themeToggleButton.textContent = isDark ? "Light" : "Dark";
+  const label = elements.themeToggleButton.querySelector("span");
+  const icon = elements.themeToggleButton.querySelector("use");
+  if (label) label.textContent = isDark ? "Light" : "Dark";
+  if (icon) icon.setAttribute("href", isDark ? "#icon-sun" : "#icon-moon");
   elements.themeToggleButton.setAttribute("aria-pressed", String(isDark));
+  elements.themeToggleButton.setAttribute("aria-label", isDark ? "Switch to light theme" : "Switch to dark theme");
+}
+
+function applyAccent() {
+  document.body.dataset.accent = state.accent;
+  elements.accentInputs.forEach((input) => {
+    input.checked = input.value === state.accent;
+  });
+}
+
+function normalizeAccent(value) {
+  return ACCENT_OPTIONS.includes(value) ? value : "blue";
+}
+
+function setGreeting() {
+  const hour = new Date().getHours();
+  elements.greetingText.textContent = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+}
+
+function setActivePage(page, scrollToTop = true) {
+  state.activePage = ["drivers", "loads"].includes(page) ? page : "overview";
+  const showDrivers = state.activePage === "drivers";
+  const showLoads = state.activePage === "loads";
+  elements.overviewContent.forEach((section) => {
+    section.hidden = showDrivers;
+  });
+  elements.driverWorkspace.hidden = !showDrivers;
+  elements.insightRail.hidden = showLoads;
+  elements.dashboardGrid.classList.toggle("loads-view", showLoads);
+  elements.overviewNav.classList.toggle("active", state.activePage === "overview");
+  elements.showAllLoadsNav.classList.toggle("active", showLoads);
+  elements.driversNav.classList.toggle("active", showDrivers);
+  if (state.activePage === "overview") state.showAllLoads = false;
+  if (showLoads) state.showAllLoads = true;
+  if (scrollToTop) window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function pageFromHash() {
+  if (window.location.hash === "#drivers") return "drivers";
+  if (window.location.hash === "#loads") return "loads";
+  return "overview";
 }
 
 function applyLedgerSettings(settings = {}) {
@@ -285,7 +417,7 @@ async function syncGmail() {
   }
 
   setStatus(`Syncing Gmail: scanning up to ${state.gmailMaxResults} emails from the last ${state.gmailLookbackDays} days...`);
-  elements.syncGmailButton.disabled = true;
+  setGmailButtonsDisabled(true);
   try {
     const result = await apiPost("/gmail/sync", {
       maxResults: state.gmailMaxResults,
@@ -302,14 +434,16 @@ async function syncGmail() {
   } catch (error) {
     setStatus(`Gmail sync failed: ${error.message}`);
   } finally {
-    elements.syncGmailButton.disabled = false;
+    setGmailButtonsDisabled(false);
   }
 }
 
+function setGmailButtonsDisabled(disabled) {
+  elements.syncGmailButton.disabled = disabled;
+}
+
 async function apiGet(path) {
-  const response = await fetch(`${cleanBaseUrl()}${path}`, {
-    headers: apiHeaders()
-  });
+  const response = await fetch(`${cleanBaseUrl()}${path}`);
   const body = await response.json().catch(() => ({}));
   if (!response.ok || body.ok === false) {
     throw new Error(body.error || `HTTP ${response.status}`);
@@ -321,8 +455,7 @@ async function apiPatch(path, payload) {
   const response = await fetch(`${cleanBaseUrl()}${path}`, {
     method: "PATCH",
     headers: {
-      "Content-Type": "application/json",
-      ...apiHeaders()
+      "Content-Type": "application/json"
     },
     body: JSON.stringify(payload)
   });
@@ -337,8 +470,7 @@ async function apiDelete(path, payload) {
   const response = await fetch(`${cleanBaseUrl()}${path}`, {
     method: "DELETE",
     headers: {
-      "Content-Type": "application/json",
-      ...apiHeaders()
+      "Content-Type": "application/json"
     },
     body: JSON.stringify(payload)
   });
@@ -353,8 +485,7 @@ async function apiPost(path, payload) {
   const response = await fetch(`${cleanBaseUrl()}${path}`, {
     method: "POST",
     headers: {
-      "Content-Type": "application/json",
-      ...apiHeaders()
+      "Content-Type": "application/json"
     },
     body: JSON.stringify(payload)
   });
@@ -363,10 +494,6 @@ async function apiPost(path, payload) {
     throw new Error(body.error || `HTTP ${response.status}`);
   }
   return body;
-}
-
-function apiHeaders() {
-  return state.apiKey ? { "x-ledger-api-key": state.apiKey } : {};
 }
 
 function cleanBaseUrl() {
@@ -420,21 +547,84 @@ function monthFilterOptions() {
 function render() {
   pruneSelectedLoads();
   const filtered = sortedLoads(filteredLoads());
+  elements.visibleLoadCount.textContent = `${filtered.length} load${filtered.length === 1 ? "" : "s"}`;
+  elements.clearQuickIdSearchButton.hidden = !state.filters.id;
   renderSortHeaders();
   renderQuickFilters();
   renderSummary(filtered);
-  renderInsights(filtered);
+  renderInsights();
+  renderGmailCard();
   renderTable(filtered);
   renderBulkActions();
   renderFuelCoverage();
 }
 
 function renderQuickFilters() {
+  const loads = ledgerLoads();
+  const counts = {
+    all: loads.length,
+    review: loads.filter((load) => needsReview(load)).length,
+    unpaid: loads.filter((load) => !isInvoicePaid(load)).length,
+    completed: loads.filter((load) => displayStatusLabel(load) === "Completed").length,
+    cancelled: loads.filter((load) => displayStatusLabel(load).includes("Cancelled")).length
+  };
+
   elements.quickFilterButtons.forEach((button) => {
     const active = (button.dataset.quickFilter || "all") === state.quickFilter;
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", String(active));
   });
+  elements.quickFilterCounts.forEach((count) => {
+    count.textContent = String(counts[count.dataset.countFor] || 0);
+  });
+  renderLoadsOverview(counts, loads.length);
+}
+
+function renderLoadsOverview(counts, total) {
+  const chartCounts = {
+    completed: counts.completed,
+    unpaid: counts.unpaid,
+    review: counts.review,
+    cancelled: counts.cancelled,
+    other: Math.max(0, total - counts.completed - counts.unpaid - counts.review - counts.cancelled)
+  };
+
+  const safeTotal = Math.max(total, 1);
+  const completedStop = (chartCounts.completed / safeTotal) * 360;
+  const unpaidStop = completedStop + (chartCounts.unpaid / safeTotal) * 360;
+  const reviewStop = unpaidStop + (chartCounts.review / safeTotal) * 360;
+  const cancelledStop = reviewStop + (chartCounts.cancelled / safeTotal) * 360;
+  elements.loadsDonut.style.setProperty("--completed-stop", `${completedStop}deg`);
+  elements.loadsDonut.style.setProperty("--unpaid-stop", `${unpaidStop}deg`);
+  elements.loadsDonut.style.setProperty("--review-stop", `${reviewStop}deg`);
+  elements.loadsDonut.style.setProperty("--cancelled-stop", `${cancelledStop}deg`);
+  elements.donutTotal.textContent = String(total);
+  elements.chartCompleted.textContent = chartValue(chartCounts.completed, total);
+  elements.chartUnpaid.textContent = chartValue(chartCounts.unpaid, total);
+  elements.chartReview.textContent = chartValue(chartCounts.review, total);
+  elements.chartCancelled.textContent = chartValue(chartCounts.cancelled, total);
+  elements.chartOther.textContent = chartValue(chartCounts.other, total);
+}
+
+function chartValue(count, total) {
+  const percent = total > 0 ? Math.round((count / total) * 100) : 0;
+  return `${count} (${percent}%)`;
+}
+
+function renderGmailCard() {
+  const account = state.accounts[0];
+  const connected = Boolean(account?.hasRefreshToken);
+  elements.gmailConnectionState.textContent = connected ? "Connected" : "Not connected";
+  elements.gmailConnectionState.classList.toggle("connected", connected);
+  elements.connectGmailButton.textContent = connected ? "Reconnect" : "Connect";
+  if (!account) {
+    elements.gmailLastSync.textContent = "No Gmail account connected";
+    return;
+  }
+  const syncedAt = formatTimestamp(account.lastGmailSyncAt);
+  elements.gmailLastSync.textContent = syncedAt
+    ? `Last synced ${syncedAt} · ${account.lastGmailSyncUpserted || 0} updated`
+    : "Connected, waiting for first sync";
 }
 
 function sortedLoads(loads) {
@@ -646,14 +836,16 @@ function renderFuelCoverage() {
     : `Mileage found for all ${loads.length} ledger loads.`;
 }
 
-function renderInsights(loads) {
+function renderInsights() {
+  const loads = ledgerLoads();
   renderDriverInsights(loads);
+  renderDriverWorkspace(loads);
 }
 
 function renderDriverInsights(loads) {
   const totals = new Map();
   loads.forEach((load) => {
-    const driver = displayDriver(load.driverName);
+    const driver = driverGroupKey(load);
     const current = totals.get(driver) || { loads: 0, total: 0, unpaid: 0 };
     current.loads += 1;
     current.total += ledgerPayout(load);
@@ -664,9 +856,205 @@ function renderDriverInsights(loads) {
   const rows = [...totals.entries()]
     .sort((a, b) => b[1].total - a[1].total)
     .slice(0, 4)
-    .map(([driver, item]) => insightRow(driver, `${item.loads} loads`, currency(item.total), item.unpaid > 0 ? `Unpaid ${currency(item.unpaid)}` : "Paid"));
+    .map(([driver, item]) => insightRow(driverGroupLabel(driver), `${item.loads} loads`, currency(item.total), item.unpaid > 0 ? `Unpaid ${currency(item.unpaid)}` : "Paid"));
 
   elements.driverInsights.replaceChildren(...(rows.length ? rows : [emptyInsight("No driver totals")]));
+}
+
+function renderDriverWorkspace(loads) {
+  const groups = groupLoadsByDriver(loads);
+  const orderedDrivers = [...groups.entries()].sort((a, b) => {
+    if (a[0] === "__unassigned__") return 1;
+    if (b[0] === "__unassigned__") return -1;
+    return sum(b[1].map(ledgerPayout)) - sum(a[1].map(ledgerPayout));
+  });
+
+  if (!groups.has(state.driverView.driver)) {
+    state.driverView.driver = orderedDrivers[0]?.[0] || "";
+    if (state.driverView.driver) localStorage.setItem("relayLedgerDriverView", state.driverView.driver);
+  }
+
+  elements.driverDetailSelect.replaceChildren();
+  orderedDrivers.forEach(([key, driverLoads]) => {
+    const option = new Option(`${driverGroupLabel(key)} · ${driverLoads.length} loads`, key);
+    elements.driverDetailSelect.append(option);
+  });
+  elements.driverDetailSelect.value = state.driverView.driver;
+  elements.driverDetailSelect.disabled = orderedDrivers.length === 0;
+
+  const driverLoads = groups.get(state.driverView.driver) || [];
+  const monthly = groupDriverLoadsByMonth(driverLoads);
+  const monthOptions = new Map(monthly.map((month) => [month.key, month.label]));
+  const defaultMonth = previousCalendarMonthKey();
+  if (!monthOptions.has(defaultMonth)) monthOptions.set(defaultMonth, formatCalendarMonth(defaultMonth));
+  if (state.driverView.month !== "all" && !monthOptions.has(state.driverView.month)) state.driverView.month = defaultMonth;
+
+  elements.driverMonthSelect.replaceChildren(
+    new Option("All months", "all"),
+    ...[...monthOptions.entries()]
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([key, label]) => new Option(label, key))
+  );
+  elements.driverMonthSelect.value = state.driverView.month;
+  elements.driverMonthSelect.disabled = orderedDrivers.length === 0;
+
+  const allMonthsSelected = state.driverView.month === "all";
+  const selectedLoads = allMonthsSelected
+    ? driverLoads
+    : driverLoads.filter((load) => calendarMonthKeyForLoad(load) === state.driverView.month);
+  const selectedTotal = sum(selectedLoads.map(ledgerPayout));
+  const selectedUnpaid = sum(selectedLoads.filter((load) => !isInvoicePaid(load)).map(ledgerPayout));
+  const previousKey = allMonthsSelected ? "" : adjacentCalendarMonthKey(state.driverView.month, -1);
+  const previousTotal = allMonthsSelected ? 0 : sum(driverLoads.filter((load) => calendarMonthKeyForLoad(load) === previousKey).map(ledgerPayout));
+  const selectedLabel = allMonthsSelected ? "All time" : formatCalendarMonth(state.driverView.month);
+  const completed = selectedLoads.filter((load) => displayStatusLabel(load) === "Completed").length;
+  const cancelled = selectedLoads.filter((load) => displayStatusLabel(load).includes("Cancelled")).length;
+  const lifetimeTotal = sum(driverLoads.map(ledgerPayout));
+
+  elements.driverMonthEarningsLabel.textContent = `${selectedLabel} earned`;
+  elements.driverMonthEarnings.textContent = currency(selectedTotal);
+  elements.driverMonthComparison.textContent = allMonthsSelected
+    ? `Across ${monthly.length} recorded month${monthly.length === 1 ? "" : "s"}`
+    : monthlyComparison(selectedTotal, previousTotal, formatCalendarMonth(previousKey));
+  elements.driverMonthLoadsLabel.textContent = `${selectedLabel} loads`;
+  elements.driverMonthLoads.textContent = String(selectedLoads.length);
+  elements.driverMonthLoadsCaption.textContent = [
+    `${completed} completed`,
+    cancelled > 0 ? `${cancelled} cancelled` : "",
+    selectedUnpaid > 0 ? `${currency(selectedUnpaid)} unpaid` : ""
+  ].filter(Boolean).join(" · ");
+  elements.driverAveragePayout.textContent = currency(selectedLoads.length ? selectedTotal / selectedLoads.length : 0);
+  elements.driverAverageCaption.textContent = allMonthsSelected
+    ? `Across all ${selectedLoads.length} recorded loads`
+    : `Across ${selectedLoads.length} load${selectedLoads.length === 1 ? "" : "s"} in ${selectedLabel}`;
+  elements.driverLifetimeEarnings.textContent = currency(lifetimeTotal);
+  elements.driverLifetimeLoads.textContent = `${driverLoads.length} lifetime load${driverLoads.length === 1 ? "" : "s"}`;
+  elements.driverMonthlySubtitle.textContent = `${driverGroupLabel(state.driverView.driver)} · ${monthly.length} recorded month${monthly.length === 1 ? "" : "s"}`;
+  elements.driverEarningsMode.textContent = state.ledgerSettings.fuelCalculatorEnabled ? "Net after fuel" : "Gross payout";
+
+  const maxMonthlyTotal = Math.max(...monthly.map((month) => month.total), 0);
+  const rows = monthly.map((month) => driverMonthRow(month, maxMonthlyTotal));
+  elements.driverMonthlyBody.replaceChildren(...rows);
+  elements.driverMonthlyEmpty.hidden = rows.length > 0;
+}
+
+function groupLoadsByDriver(loads) {
+  const groups = new Map();
+  loads.forEach((load) => {
+    const key = driverGroupKey(load);
+    const group = groups.get(key) || [];
+    group.push(load);
+    groups.set(key, group);
+  });
+  return groups;
+}
+
+function groupDriverLoadsByMonth(loads) {
+  const months = new Map();
+  loads.forEach((load) => {
+    const key = calendarMonthKeyForLoad(load);
+    if (!key) return;
+    const month = months.get(key) || { key, label: formatCalendarMonth(key), loads: [], total: 0, unpaid: 0 };
+    const payout = ledgerPayout(load);
+    month.loads.push(load);
+    month.total += payout;
+    if (!isInvoicePaid(load)) month.unpaid += payout;
+    months.set(key, month);
+  });
+  return [...months.values()].sort((a, b) => b.key.localeCompare(a.key));
+}
+
+function driverMonthRow(month, maxTotal) {
+  const row = document.createElement("tr");
+  row.classList.toggle("selected", month.key === state.driverView.month);
+  row.tabIndex = 0;
+  row.setAttribute("role", "button");
+  row.setAttribute("aria-label", `Show ${month.label} driver totals`);
+  const selectMonth = () => {
+    state.driverView.month = month.key;
+    localStorage.setItem("relayLedgerDriverMonth", month.key);
+    renderDriverWorkspace(ledgerLoads());
+  };
+  row.addEventListener("click", selectMonth);
+  row.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      selectMonth();
+    }
+  });
+
+  const monthCell = document.createElement("td");
+  monthCell.dataset.label = "Month";
+  const monthName = document.createElement("strong");
+  monthName.textContent = month.label;
+  monthCell.append(monthName);
+
+  const loadsCell = document.createElement("td");
+  loadsCell.dataset.label = "Loads";
+  loadsCell.textContent = String(month.loads.length);
+
+  const earnedCell = document.createElement("td");
+  earnedCell.dataset.label = "Earned";
+  earnedCell.className = "driver-earned-cell";
+  const earned = document.createElement("strong");
+  earned.textContent = currency(month.total);
+  const bar = document.createElement("span");
+  bar.className = "driver-earnings-bar";
+  bar.style.setProperty("--bar-width", `${maxTotal > 0 ? Math.max(4, (month.total / maxTotal) * 100) : 0}%`);
+  earnedCell.append(earned, bar);
+
+  const averageCell = document.createElement("td");
+  averageCell.dataset.label = "Average / load";
+  averageCell.textContent = currency(month.loads.length ? month.total / month.loads.length : 0);
+
+  const unpaidCell = document.createElement("td");
+  unpaidCell.dataset.label = "Unpaid";
+  unpaidCell.textContent = currency(month.unpaid);
+  unpaidCell.classList.toggle("has-unpaid", month.unpaid > 0);
+
+  row.append(monthCell, loadsCell, earnedCell, averageCell, unpaidCell);
+  return row;
+}
+
+function driverGroupKey(load) {
+  return normalizeDriverName(load.driverName) || "__unassigned__";
+}
+
+function driverGroupLabel(key) {
+  return key === "__unassigned__" || !key ? "Unassigned" : displayDriver(key);
+}
+
+function calendarMonthKeyForLoad(load) {
+  const date = loadDate(load.tripStartDate || load.pickupDate || load.bookedAt || load.emailDate);
+  if (!date) return "";
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function previousCalendarMonthKey() {
+  const date = new Date();
+  date.setDate(1);
+  date.setMonth(date.getMonth() - 1);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function adjacentCalendarMonthKey(key, offset) {
+  const match = String(key || "").match(/^(\d{4})-(\d{2})$/);
+  if (!match) return previousCalendarMonthKey();
+  const date = new Date(Number(match[1]), Number(match[2]) - 1 + offset, 1, 12);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function formatCalendarMonth(key) {
+  const match = String(key || "").match(/^(\d{4})-(\d{2})$/);
+  if (!match) return "Unknown month";
+  return new Date(Number(match[1]), Number(match[2]) - 1, 1, 12).toLocaleDateString("en-US", { month: "long", year: "numeric" });
+}
+
+function monthlyComparison(current, previous, previousLabel) {
+  if (!(previous > 0)) return `No earnings recorded in ${previousLabel}`;
+  const change = ((current - previous) / previous) * 100;
+  const direction = change >= 0 ? "up" : "down";
+  return `${Math.abs(change).toFixed(1)}% ${direction} from ${previousLabel}`;
 }
 
 function insightRow(label, meta, value, extra) {
@@ -694,12 +1082,21 @@ function emptyInsight(text) {
 function renderTable(loads) {
   elements.loadsBody.replaceChildren();
   elements.emptyState.hidden = loads.length !== 0;
+  const hasActiveFilters = state.quickFilter !== "all" || Object.values(state.filters).some(Boolean);
+  const showFullLedger = state.activePage === "loads" || state.showAllLoads || hasActiveFilters;
+  elements.viewAllLoadsButton.hidden = state.activePage === "loads";
+  elements.viewAllLoadsButton.innerHTML = showFullLedger
+    ? 'Show recent loads <span aria-hidden="true">&#8593;</span>'
+    : 'View all loads <span aria-hidden="true">&#8594;</span>';
+
+  if (!showFullLedger) {
+    loads.slice(0, 7).forEach((load) => elements.loadsBody.append(loadRow(load)));
+    return;
+  }
 
   groupLoadsByWeek(loads).forEach((week) => {
     elements.loadsBody.append(weekHeaderRow(week));
-    week.loads.forEach((load) => {
-      elements.loadsBody.append(loadRow(load));
-    });
+    week.loads.forEach((load) => elements.loadsBody.append(loadRow(load)));
   });
 }
 
@@ -707,7 +1104,7 @@ function weekHeaderRow(week) {
   const row = document.createElement("tr");
   row.className = "week-row";
   const cell = document.createElement("td");
-  cell.colSpan = 12;
+  cell.colSpan = 8;
   const weekIds = week.loads.map((load) => load.id).filter(Boolean);
   const allSelected = weekIds.length > 0 && weekIds.every((id) => state.selectedLoadIds.has(id));
   const partiallySelected = weekIds.some((id) => state.selectedLoadIds.has(id));
@@ -798,6 +1195,7 @@ function loadRow(load) {
 
     const noteButton = row.querySelector('[data-action="show-note"]');
     const notePreview = row.querySelector('[data-field="note-preview"]');
+    const noteIndicator = row.querySelector('[data-field="note-indicator"]');
     const notes = row.querySelector('[data-action="notes"]');
     notes.value = load.notes || "";
     noteButton.textContent = load.notes ? "Edit note" : "Add note";
@@ -805,6 +1203,7 @@ function loadRow(load) {
       menuButton.title = `Note: ${load.notes}`;
       notePreview.textContent = load.notes;
       notePreview.hidden = false;
+      noteIndicator.hidden = false;
     }
 
     noteButton.addEventListener("click", () => {
@@ -1324,8 +1723,8 @@ function moneyValue(value) {
 }
 
 function grossLedgerPayout(load) {
+  if (isCancelledLoad(load)) return CANCELLED_LOAD_PAYOUT;
   if (isDisputePaid(load) && moneyValue(load.settlementAmount) > 0) return moneyValue(load.settlementAmount);
-  if (isCancelledLoad(load)) return 175;
 
   if (sourceHas(load, "gmail")) {
     const gmailPayout = moneyValue(load.gmailPayout ?? load.originalBookedPayout ?? load.bookedPayout);
@@ -1342,6 +1741,7 @@ function ledgerPayout(load) {
 
 function estimatedFuelCost(load) {
   if (!state.ledgerSettings.fuelCalculatorEnabled) return 0;
+  if (isCancelledLoad(load)) return 0;
   const miles = loadMiles(load);
   if (miles <= 0) return 0;
   return roundMoney((miles / state.ledgerSettings.fuelMpg) * state.ledgerSettings.fuelPricePerGallon);
@@ -1454,4 +1854,7 @@ function timestampToDate(value) {
 
 function setStatus(message) {
   elements.connectionStatus.textContent = message;
+  const normalized = String(message || "").toLowerCase();
+  elements.connectionStatus.classList.toggle("status-error", /failed|could not|unauthorized|error|missing/.test(normalized));
+  elements.connectionStatus.classList.toggle("status-working", /loading|syncing|saving|clearing|deleting/.test(normalized));
 }

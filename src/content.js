@@ -1,6 +1,5 @@
 const DEFAULT_SETTINGS = {
   backendBaseUrl: "",
-  apiKey: "",
   autoSync: true,
   syncIntervalMinutes: 15,
   dateRangeDays: 60
@@ -733,7 +732,6 @@ async function syncTrips(reason) {
   const body = await chrome.runtime.sendMessage({
     type: "RELAY_LEDGER_POST_SYNC",
     backendBaseUrl: settings.backendBaseUrl,
-    apiKey: settings.apiKey,
     payload: {
       source: "amazon-relay-trips-ledger-extension",
       reason,
@@ -778,7 +776,6 @@ async function syncSettlements(reason) {
   const body = await chrome.runtime.sendMessage({
     type: "RELAY_LEDGER_POST_PAYMENTS_SYNC",
     backendBaseUrl: settings.backendBaseUrl,
-    apiKey: settings.apiKey,
     payload: {
       source: "amazon-relay-payments-ledger-extension",
       reason,
@@ -835,7 +832,6 @@ function parseTripDate(value) {
 function sanitizeSettings(settings) {
   return {
     hasBackendBaseUrl: Boolean(settings.backendBaseUrl),
-    hasApiKey: Boolean(settings.apiKey),
     autoSync: Boolean(settings.autoSync),
     syncIntervalMinutes: settings.syncIntervalMinutes,
     dateRangeDays: settings.dateRangeDays
